@@ -8,7 +8,7 @@
 |---|---|
 | `deskdash.koplugin/` | KOReader 插件：4 页仪表盘（现在 / 逐小时 / 7 天 / 详情），数据来自 Open-Meteo + ip-api |
 | `kdev/` | Kindle 端调试：`sshd.sh`（用 Jobman 自带的 dropbear 起一个只允许密钥登录的 SSH，仅限局域网）、`authorized_keys` |
-| `tools/` | 电脑端：`kctl.py`（命令 / 截图 / 推送，走 SSH）、`deploy_dash.sh`（部署插件） |
+| `tools/` | 电脑端：`kctl.py`（命令 / 截图 / 推送，走 SSH）、`deploy_dash.sh`（部署插件，出错自动回滚）、`check.sh`（本地检查 + 测试） |
 | `documents/` | Kindle 书库里的 scriptlet（SSH - Start） |
 
 ## 日常使用
@@ -37,9 +37,10 @@ Host kindle
 ```bash
 ssh kindle
 python tools/kctl.py shot             # 截图到 tools/inbox/shot.png
-python tools/kctl.py dash next        # 给插件发命令：next | prev | refresh | close | quit | sleep | page N
+python tools/kctl.py dash next        # 给插件发命令：next | prev | refresh | close | quit | restart | sleep | demo | page N
 python tools/kctl.py push kdev/sshd.sh
-sh tools/deploy_dash.sh               # 推送插件并重启 KOReader
+sh tools/check.sh                     # 本地检查 + 单元测试（<1 秒，需要 LuaJIT：winget install DEVCOM.LuaJIT）
+sh tools/deploy_dash.sh               # 检查 → 推送 → 重启 → 验证（失败自动回滚）→ 截图，约 12 秒；--shots 截全部页面
 ```
 
-注意：KOReader 会独占触摸屏，所以 `kctl.py tap/swipe` 只在 Kindle 原生界面里有效；插件用 `dash` 命令控制。USB 连电脑时 `/mnt/us` 被卸载，SSH 登录会失败（密钥在 `/mnt/us` 上）。
+注意：KOReader 会独占触摸屏，插件用 `dash` 命令控制。USB 连电脑时 `/mnt/us` 被卸载，SSH 登录会失败（密钥在 `/mnt/us` 上）。
