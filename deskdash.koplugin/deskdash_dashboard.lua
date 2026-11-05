@@ -405,7 +405,11 @@ function Dashboard:onTick()
     if os.time() - (self.fetched_at or 0) >= WEATHER_EVERY then self:refreshWeather() end
     self:redraw(self.minutes % FLASH_EVERY == 0 and "full" or "ui")
     self:scheduleTick()
-    if self:canSleep() then UIManager:scheduleIn(SETTLE, self._sleep) end
+    if self:canSleep() then
+        UIManager:scheduleIn(SETTLE, self._sleep)
+    else
+        self:restoreLight()   -- staying awake (e.g. charger plugged in): undo the battery-mode light-off
+    end
 end
 
 function Dashboard:canSleep()
