@@ -139,6 +139,56 @@ function Weather.alerts(lat, lon)
     return list
 end
 
+--- "2026-11-05T13:00" or "2026-11-05" -> "local" epoch (as if UTC; format with os.date("!...")).
+--- Pure arithmetic (days-from-civil), so it doesn't depend on the system time zone or DST.
+function Weather.parseISO(s)
+    local y, m, d, H, M = s:match("(%d+)-(%d+)-(%d+)T?(%d*):?(%d*)")
+    y, m, d = tonumber(y), tonumber(m), tonumber(d)
+    if m <= 2 then y = y - 1 end
+    local era = math.floor(y / 400)
+    local yoe = y - era * 400
+    local doy = math.floor((153 * (m + (m > 2 and -3 or 9)) + 2) / 5) + d - 1
+    local days = era * 146097 + yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy - 719468
+    return days * 86400 + (tonumber(H) or 12) * 3600 + (tonumber(M) or 0) * 60
+end
+local parseISO = Weather.parseISO
+
+local SNOW_CODES = { [71] = true, [73] = true, [75] = true, [77] = true, [85] = true, [86] = true }
+
+--- iOS-style precipitation summary for a forecast, e.g. "Rain starting around 15:15", or nil.
+--- fmt formats a "local" epoch as a time of day.
+function Weather.precipSummary(d, fmt)
+    local word = (d.current and SNOW_CODES[d.current.weather_code]) and "Snow" or "Rain"
+    local m = d.minutely_15
+    if m and m.precipitation and #m.precipitation > 0 then
+        local th = (d.minutely_15_units and d.minutely_15_units.precipitation == "inch") and 0.004 or 0.1
+        local wet_now = (m.precipitation[1] or 0) >= th
+        for i = 2, #m.precipitation do
+            if ((m.precipitation[i] or 0) >= th) ~= wet_now then
+                return string.format("%s %s around %s", word, wet_now and "stopping" or "starting", fmt(parseISO(m.time[i])))
+            end
+        end
+        if wet_now then return word .. " for the next 2 hours" end
+    end
+    local h = d.hourly
+    if not h then return nil end
+    for i = 3, math.min(13, #h.time) do   -- beyond the 15-minute window
+        local p, code = h.precipitation_probability and h.precipitation_probability[i], h.weather_code[i]
+        if p and p >= 60 and code >= 51 then
+            return string.format("%s likely around %s", SNOW_CODES[code] and "Snow" or "Rain", fmt(parseISO(h.time[i])))
+        end
+    end
+end
+
+--- Most severe alert that hasn't ended at "local" epoch now, e.g. "Wind Advisory until 18:00", or nil.
+function Weather.activeAlert(alerts, now, fmt)
+    for _, a in ipairs(alerts or {}) do
+        local ends = a.ends and parseISO(a.ends:sub(1, 16))
+        if not ends then return a.event end
+        if ends > now then return a.event .. " until " .. fmt(ends) end
+    end
+end
+
 --- Moon phase at a UTC epoch: name, illuminated fraction (0..1), icon.
 local MOON_ICON0 = 0xE38D   -- Weather Icons wi-moon-new .. 27 more phases, in order
 function Weather.moon(t)

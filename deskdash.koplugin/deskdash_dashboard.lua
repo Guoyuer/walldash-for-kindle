@@ -21,6 +21,8 @@ local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local logger = require("logger")
+local Weather = require("deskdash_weather")
+local parseISO = Weather.parseISO
 local Screen = Device.screen
 
 local BLACK = Blitbuffer.COLOR_BLACK
@@ -72,7 +74,6 @@ local function deg(v) return v and string.format("%d°", math.floor(v + 0.5)) or
 
 local Dashboard = InputContainer:extend{
     covers_fullscreen = true,
-    weather = nil,   -- Weather module, injected
     settings = nil,  -- { units=, clock_24h=, lat=, lon=, city= }
 }
 
@@ -96,9 +97,11 @@ function Dashboard:init()
     self:rebuild()
     self:scheduleTick()
     UIManager:scheduleIn(1, self._poll)
+    logger.info("deskdash: dashboard up")   -- tools/kindle_deploy.sh waits for this
 end
 
--- Debug/remote control: write one of next|prev|refresh|close|quit|restart|sleep|page N to this file.
+-- Debug/remote control: write one of next|prev|refresh|close|quit|restart|sleep|demo|demo off|page N to this file.
+-- ("demo" shows fake alert/rain/low-battery notices, to check their layout.)
 -- ("sleep" forces one battery-mode sleep even when plugged in; "restart" reloads KOReader + plugin quickly.)
 -- (KOReader grabs the touchscreen, so injected touches can't reach it.)
 local CMD_FILE = "/tmp/deskdash_cmd"
@@ -110,6 +113,7 @@ function Dashboard:pollCommand()
         os.remove(CMD_FILE)
         logger.info("deskdash: command", cmd)
         if cmd == "sleep" then self.last_touch = 0; self.force_sleep = true; UIManager:nextTick(self._sleep)
+        elseif cmd == "demo" or cmd == "demo off" then self.demo = (cmd == "demo"); self:redraw("full")
         elseif cmd == "next" then self:onSwipe(nil, { direction = "west" })
         elseif cmd == "prev" then self:onSwipe(nil, { direction = "east" })
         elseif cmd == "refresh" then self:onTap()
@@ -134,7 +138,7 @@ end
 -- ---------------------------------------------------------------- data
 
 function Dashboard:refreshWeather()
-    local W, s = self.weather, self.settings
+    local W, s = Weather, self.settings
     if not (s.lat and s.lon) or not self.offset then
         local loc = W.locate()
         if loc then
@@ -215,51 +219,6 @@ function Dashboard:hhmm(t)
     return (os.date("!%I:%M", t):gsub("^0", ""))
 end
 
-local function parseISO(s) -- "2026-11-05T13:00" or "2026-11-05" -> "local" epoch (as if UTC)
-    local y, m, d, H, M = s:match("(%d+)-(%d+)-(%d+)T?(%d*):?(%d*)")
-    local t = os.time{ year = y, month = m, day = d, hour = tonumber(H) or 12, min = tonumber(M) or 0 }
-    -- os.time() reads the table as local time; undo the system TZ so results behave like UTC
-    local utc = os.date("!*t", t); utc.isdst = false
-    return t + (t - os.time(utc))
-end
-
-local SNOW_CODES = { [71] = true, [73] = true, [75] = true, [77] = true, [85] = true, [86] = true }
-
--- iOS-style precipitation summary: "Rain starting around 3:15", "Rain stopping around 4:00", "Snow likely around 18:00".
-function Dashboard:precipLine()
-    local d = self.data
-    if not d then return nil end
-    local word = SNOW_CODES[d.current.weather_code] and "Snow" or "Rain"
-    local m = d.minutely_15
-    if m and m.precipitation and #m.precipitation > 0 then
-        local th = (d.minutely_15_units and d.minutely_15_units.precipitation == "inch") and 0.004 or 0.1
-        local wet_now = (m.precipitation[1] or 0) >= th
-        for i = 2, #m.precipitation do
-            if ((m.precipitation[i] or 0) >= th) ~= wet_now then
-                return string.format("%s %s around %s", word, wet_now and "stopping" or "starting", self:hhmm(parseISO(m.time[i])))
-            end
-        end
-        if wet_now then return word .. " for the next 2 hours" end
-    end
-    local h = d.hourly
-    for i = 3, math.min(13, #h.time) do   -- beyond the 15-minute window
-        local p, code = h.precipitation_probability and h.precipitation_probability[i], h.weather_code[i]
-        if p and p >= 60 and code >= 51 then
-            return string.format("%s likely around %s", SNOW_CODES[code] and "Snow" or "Rain", self:hhmm(parseISO(h.time[i])))
-        end
-    end
-end
-
--- Most severe active NWS alert, e.g. "Wind Advisory until 18:00" (nil if none).
-function Dashboard:alertLine()
-    local now = self:now()
-    for _, a in ipairs(self.alerts or {}) do
-        local ends = a.ends and parseISO(a.ends:sub(1, 16))
-        if not ends then return a.event end
-        if ends > now then return a.event .. " until " .. self:hhmm(ends) end
-    end
-end
-
 -- ---------------------------------------------------------------- pages
 
 function Dashboard:dots()
@@ -288,7 +247,9 @@ end
 function Dashboard:pageNow()
     local t, d = self:now(), self.data
     local date = os.date("!%A, %B ", t) .. tonumber(os.date("!%d", t))
-    local alert, precip = self:alertLine(), self:precipLine()
+    local alert = Weather.activeAlert(self.alerts, self:now(), function(t) return self:hhmm(t) end)
+    local precip = self.data and Weather.precipSummary(self.data, function(t) return self:hhmm(t) end)
+    if self.demo then alert, precip = "Wind Advisory until 18:00", "Rain starting around 15:30" end
     local extra = (alert and 1 or 0) + (precip and 1 or 0)   -- make room for the notice lines
     local g = VerticalGroup:new{ align = "center",
         vspan(70 - 15 * extra),
@@ -298,14 +259,14 @@ function Dashboard:pageNow()
     }
     if d then
         local c, today = d.current, d.daily
-        local cond, icon = self.weather.describe(c.weather_code, c.is_day == 1)
+        local cond, icon = Weather.describe(c.weather_code, c.is_day == 1)
         table.insert(g, HorizontalGroup:new{ align = "center",
             txt(icon, ICONS, 190), hspan(90), txt(deg(c.temperature_2m), HEAVY, 210) })
         table.insert(g, vspan(30))
         table.insert(g, txt(cond, BOLD, 66))
         table.insert(g, vspan(14))
         table.insert(g, txt("H " .. deg(today.temperature_2m_max[1]) .. "    L " .. deg(today.temperature_2m_min[1]), SANS, 54, GRAY))
-        local I = self.weather.ICON
+        local I = Weather.ICON
         if alert or precip then table.insert(g, vspan(26)) end
         if alert then
             table.insert(g, HorizontalGroup:new{ align = "center", txt(I.warning, ICONS, 40), hspan(16),
@@ -329,7 +290,7 @@ function Dashboard:pageHourly()
     local rowW, rowH = self.W - 160, 88
     for i = 1, math.min(12, #h.time) do
         local t = parseISO(h.time[i])
-        local _, icon = self.weather.describe(h.weather_code[i], h.is_day and h.is_day[i] == 1)
+        local _, icon = Weather.describe(h.weather_code[i], h.is_day and h.is_day[i] == 1)
         local p = h.precipitation_probability and h.precipitation_probability[i]
         local label = (i == 1) and "Now" or self:hhmm(t)
         table.insert(g, HorizontalGroup:new{ align = "center",
@@ -372,7 +333,7 @@ function Dashboard:pageDaily()
     end
     local rowW, rowH = self.W - 120, 132
     for i = 1, n do
-        local _, icon = self.weather.describe(d.weather_code[i], true)
+        local _, icon = Weather.describe(d.weather_code[i], true)
         local p = d.precipitation_probability_max and d.precipitation_probability_max[i]
         local day = (i == 1) and "Today" or os.date("!%a", parseISO(d.time[i]))
         table.insert(g, HorizontalGroup:new{ align = "center",
@@ -410,7 +371,7 @@ function Dashboard:pageDetails()
     local g = self:header("DETAILS")
     local d = self.data
     if not d then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
-    local W, c, day, I = self.weather, d.current, d.daily, self.weather.ICON
+    local W, c, day, I = Weather, d.current, d.daily, Weather.ICON
     local units = (d.current_units and d.current_units.wind_speed_10m) or "km/h"
     local punits = (d.daily_units and d.daily_units.precipitation_sum) or "mm"
     local tw, th, gap = math.floor((self.W - 80 - 22) / 2), 252, 22
@@ -456,9 +417,9 @@ end
 
 -- Low-battery warning in the bottom-left corner, level with the page dots (only on battery, at <= LOW_BATTERY %).
 function Dashboard:batteryBadge()
-    local pct = Device:isKindle() and self:batteryLevel()
-    if not pct or pct > LOW_BATTERY or self:onExternalPower() then return nil end
-    local I = self.weather.ICON
+    local pct = self.demo and 15 or (Device:isKindle() and self:batteryLevel())
+    if not self.demo and (not pct or pct > LOW_BATTERY or self:onExternalPower()) then return nil end
+    local I = Weather.ICON
     return HorizontalGroup:new{ align = "center", overlap_offset = { 40, self.H - 96 },
         txt(pct <= 5 and I.battery_empty or I.battery_low, ICONS, 40), hspan(24),
         txt(pct .. "%  Charge me", BOLD, 34) }

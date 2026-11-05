@@ -10,7 +10,9 @@ local _ = require("gettext")
 
 -- Plugin-local modules must be required while the plugin is being loaded.
 local Dashboard = require("deskdash_dashboard")
-local Weather = require("deskdash_weather")
+-- Written by tools/deploy_dash.sh (git commit of the deployed code).
+local ok_v, VERSION = pcall(require, "deskdash_version")
+if not ok_v then VERSION = "dev" end
 
 local DeskDash = WidgetContainer:extend{
     name = "deskdash",
@@ -24,6 +26,7 @@ local function setting(key, default)
 end
 
 function DeskDash:init()
+    if not DeskDash._logged then DeskDash._logged = true; require("logger").info("deskdash: loaded version", VERSION) end
     Dispatcher:registerAction("deskdash_show", {
         category = "none", event = "ShowDeskDash", title = _("Desk dashboard"), general = true,
     })
@@ -95,7 +98,6 @@ end
 function DeskDash:onShowDeskDash()
     if DeskDash._dash then return true end
     local dash = Dashboard:new{
-        weather = Weather,
         settings = {
             units = setting("units", "metric"),
             clock_24h = setting("clock_24h", true),
