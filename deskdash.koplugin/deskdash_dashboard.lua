@@ -38,12 +38,14 @@ local HEAVY = BOLD   -- big numerals (KOReader can't see the Kindle's Amazon Emb
 local PAGES = 4
 local IDLE_RETURN = 120          -- seconds on another page before returning to "Now"
 local WEATHER_EVERY = 15 * 60    -- seconds between forecast fetches
-local FLASH_EVERY = 30           -- minutes between flashing full refreshes
+local FLASH_EVERY = 30           -- flashing full refresh when the minute is a multiple of this
 -- Battery mode: on battery, suspend to RAM between minute updates (e-ink keeps the picture).
 local AWAKE_AFTER_INPUT = 60     -- stay awake this long after a touch / power-button wake
 local LOW_BATTERY = 20           -- % at which a "charge me" badge appears (on battery only)
 local POWER_LOG = "/mnt/us/deskdash_power.csv"   -- hourly power stats; analyse with tools/power.py
 local BAT = "/sys/class/power_supply/bd71827_bat/"
+-- Night (local hours [from, to)): wake only every `step` minutes and don't fetch the weather.
+local NIGHT = { from = 2, to = 5, step = 10 }
 local RTC = "/dev/rtc1"          -- the wake-capable RTC on the PW4 (snvs)
 
 -- Font:getFace() scales sizes by DPI; we think in screen pixels.
@@ -90,7 +92,6 @@ function Dashboard:init()
         Hold = { GestureRange:new{ ges = "hold", range = self.dimen } },
     }
     self.page = 1
-    self.minutes = 0
     self.last_touch = os.time()
     self._tick = function() self:onTick() end
     self._poll = function() self:pollCommand() end
@@ -505,11 +506,11 @@ function Dashboard:scheduleTick()
 end
 
 function Dashboard:onTick()
-    self.minutes = self.minutes + 1
     self:powerTick()
     if self.page ~= 1 and os.time() - self.last_touch >= IDLE_RETURN then self.page = 1 end
-    if os.time() - (self.fetched_at or 0) >= WEATHER_EVERY then self:refreshWeather() end
-    self:redraw(self.minutes % FLASH_EVERY == 0 and "full" or "ui")
+    local now = self:now()
+    if not Weather.isNight(now, NIGHT) and os.time() - (self.fetched_at or 0) >= WEATHER_EVERY then self:refreshWeather() end
+    self:redraw(tonumber(os.date("!%M", now)) % FLASH_EVERY == 0 and "full" or "ui")
     self:scheduleTick()
     if self:canSleep() then
         UIManager:nextTick(self._sleep)
@@ -528,7 +529,7 @@ end
 function Dashboard:sleepUntilNextMinute()
     if not self:canSleep() then return end
     self.force_sleep = nil
-    local secs = 60 - tonumber(os.date("%S"))
+    local secs = Weather.secondsToNextWake(self:now(), NIGHT)   -- next minute, or next 10 minutes at night
     if secs < 5 then return end   -- too close to the minute; the regular tick handles it
     local target = os.time() + secs
     UIManager:unschedule(self._tick)

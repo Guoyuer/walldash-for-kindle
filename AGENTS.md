@@ -85,6 +85,8 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   weather (~10 s to connect; `waitForWifi()` polls `com.lab126.wifid cmState`, ≤30 s), then off again at the next sleep.
   `restore()` turns light + Wi-Fi back on when staying awake (power button, charger, dashboard closed). Only Wi-Fi the
   plugin switched off is switched back on.
+- Night (`NIGHT`, local 2:00-5:00): wakes only every 10 minutes (`Weather.secondsToNextWake`) and skips weather
+  fetches (`Weather.isNight`). Full flashing refresh when the local minute is a multiple of 30.
 - The `sleep` command forces one cycle even when plugged in.
 - **Power log** `/mnt/us/deskdash_power.csv` (`powerTick`/`logPower`): one row per hour + on plug/unplug/start/close.
   Counters (wakes, power-button wakes, fetches, failures, Wi-Fi wait s) are in memory; awake_s is the delta of
