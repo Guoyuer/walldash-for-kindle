@@ -21,6 +21,7 @@ local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local logger = require("logger")
+local time = require("ui/time")
 local Weather = require("deskdash_weather")
 local parseISO = Weather.parseISO
 local Screen = Device.screen
@@ -41,6 +42,8 @@ local FLASH_EVERY = 30           -- minutes between flashing full refreshes
 -- Battery mode: on battery, suspend to RAM between minute updates (e-ink keeps the picture).
 local AWAKE_AFTER_INPUT = 60     -- stay awake this long after a touch / power-button wake
 local LOW_BATTERY = 20           -- % at which a "charge me" badge appears (on battery only)
+local POWER_LOG = "/mnt/us/deskdash_power.csv"   -- hourly power stats; analyse with tools/power.py
+local BAT = "/sys/class/power_supply/bd71827_bat/"
 local RTC = "/dev/rtc1"          -- the wake-capable RTC on the PW4 (snvs)
 
 -- Font:getFace() scales sizes by DPI; we think in screen pixels.
@@ -93,7 +96,10 @@ function Dashboard:init()
     self._poll = function() self:pollCommand() end
     self._sleep = function() self:sleepUntilNextMinute() end
     self:keepAwake(true)
+    self:resetPowerStats()
+    self.pw.ac = self:onExternalPower()
     self:refreshWeather()
+    self:logPower("start")   -- after the first fetch, so the row has the local time
     self:rebuild()
     self:scheduleTick()
     UIManager:scheduleIn(1, self._poll)
@@ -159,6 +165,8 @@ function Dashboard:refreshWeather()
     end
     -- On failure, try again at the next minute instead of waiting a full WEATHER_EVERY.
     self.fetched_at = ok and os.time() or (os.time() - WEATHER_EVERY + 60)
+    self.pw.fetches = self.pw.fetches + 1
+    if not ok then self.pw.fails = self.pw.fails + 1 end
 end
 
 -- Battery mode switches Wi-Fi off between weather fetches (it otherwise reassociates at every minute wake).
@@ -182,15 +190,18 @@ end
 function Dashboard:waitForWifi()
     if not Device:isKindle() then return end
     local t0 = os.time()
+    local t_mono = time.now()
     while os.time() - t0 < 30 do
         local p = io.popen("lipc-get-prop com.lab126.wifid cmState 2>/dev/null")
         local state = p and p:read("*l"); if p then p:close() end
         if state == "CONNECTED" then
             if os.time() > t0 then logger.info("deskdash: wifi up after", os.time() - t0, "s") end
+            self.pw.wifi = self.pw.wifi + time.to_number(time.since(t_mono))
             return
         end
         os.execute("sleep 1")
     end
+    self.pw.wifi = self.pw.wifi + time.to_number(time.since(t_mono))
     logger.warn("deskdash: wifi not connected after 30 s")
 end
 
@@ -207,6 +218,43 @@ end
 
 function Dashboard:batteryLevel()
     return tonumber(readFile("/sys/class/power_supply/bd71827_bat/capacity") or "")
+end
+
+-- ---------------------------------------------------------------- power stats
+-- Counters live in memory; one CSV row per hour (and on plug/unplug). Awake time comes for free: KOReader's
+-- monotonic clock doesn't advance during suspend, so its delta between two rows is the time spent awake.
+-- charge_mAh is the fuel gauge's coulomb counter: its drop per hour is the average current in mA.
+local POWER_HEADER = "time,event,pct,charge_mAh,mV,ac,temp_C,wall_s,awake_s,wakes,early,fetches,fails,wifi_s\n"
+
+function Dashboard:resetPowerStats()
+    self.pw = { t = os.time(), mono = time.now(), wakes = 0, early = 0, fetches = 0, fails = 0, wifi = 0, ac = self.pw and self.pw.ac }
+end
+
+function Dashboard:logPower(event)
+    if not Device:isKindle() then return end
+    local pw = self.pw
+    local f = io.open(POWER_LOG, "a")
+    if f then
+        if f:seek("end") == 0 then f:write(POWER_HEADER) end
+        local num = function(name, div) local v = tonumber(readFile(BAT .. name) or ""); return v and v / div or "" end
+        f:write(string.format("%s,%s,%s,%s,%s,%d,%s,%d,%.1f,%d,%d,%d,%d,%.1f\n",
+            os.date("!%Y-%m-%d %H:%M", self:now()), event, readFile(BAT .. "capacity") or "",
+            num("charge_now", 1000), num("voltage_now", 1000), self:onExternalPower() and 1 or 0, readFile(BAT .. "temp") or "",
+            os.time() - pw.t, time.to_number(time.since(pw.mono)), pw.wakes, pw.early, pw.fetches, pw.fails, pw.wifi))
+        f:close()
+    end
+    self:resetPowerStats()
+end
+
+-- Called every minute: a row on the hour, and whenever the charger is plugged in / pulled out.
+function Dashboard:powerTick()
+    local ac = self:onExternalPower()
+    if ac ~= self.pw.ac then
+        self.pw.ac = ac
+        self:logPower(ac and "plug" or "unplug")
+    elseif os.date("!%M", self:now()) == "00" then
+        self:logPower("hour")
+    end
 end
 
 function Dashboard:now()
@@ -458,6 +506,7 @@ end
 
 function Dashboard:onTick()
     self.minutes = self.minutes + 1
+    self:powerTick()
     if self.page ~= 1 and os.time() - self.last_touch >= IDLE_RETURN then self.page = 1 end
     if os.time() - (self.fetched_at or 0) >= WEATHER_EVERY then self:refreshWeather() end
     self:redraw(self.minutes % FLASH_EVERY == 0 and "full" or "ui")
@@ -496,7 +545,9 @@ function Dashboard:sleepUntilNextMinute()
     end
     os.execute(string.format("sync; rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
     local early = target - os.time()
+    self.pw.wakes = self.pw.wakes + 1
     if early > 2 then
+        self.pw.early = self.pw.early + 1
         -- woken before the alarm: power button (or suspend refused) -> stay interactive for a while
         logger.info("deskdash: woke", early, "s early")
         self:restore()
@@ -538,6 +589,7 @@ function Dashboard:onTap()
 end
 
 function Dashboard:onClose()
+    self:logPower("close")
     UIManager:unschedule(self._tick)
     UIManager:unschedule(self._poll)
     UIManager:unschedule(self._sleep)
