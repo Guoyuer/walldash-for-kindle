@@ -11,6 +11,7 @@ return {
     ["7-DAY FORECAST"] = "七天预报",
     ["DETAILS"] = "天气详情",
     ["No data"] = "暂无数据",
+    ["Loading weather…"] = "正在加载天气…",
     ["Weather unavailable"] = "天气暂不可用",
     ["Forecast unavailable"] = "预报暂不可用",
     ["Check Wi-Fi · tap to retry"] = "检查 Wi-Fi · 点击重试",

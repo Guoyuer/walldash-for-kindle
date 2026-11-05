@@ -338,8 +338,11 @@ end
 
 -- Match the forecast's local clock fields. Use os.time() for elapsed time and UTC timestamps.
 function Dashboard:localNow()
-    local off = (self.data and self.data.utc_offset_seconds) or self.offset or 0
-    return os.time() + off   -- "local" epoch; always format with "!"
+    local now = os.time()
+    local offset = (self.data and self.data.utc_offset_seconds) or self.offset
+    if offset then return now + offset end
+    -- Before geolocation, use the Kindle's configured time zone for the first paint.
+    return parseWallTime(os.date("%Y-%m-%dT%H:%M", now)) + now % 60
 end
 
 function Dashboard:hhmm(t, omit_period)
@@ -500,6 +503,8 @@ function Dashboard:pageNow()
         local hi = is_today and daily.temperature_2m_max[day_index]
         local lo = is_today and daily.temperature_2m_min[day_index]
         table.insert(weather, txt(self:tr("H") .. " " .. deg(hi) .. "    " .. self:tr("L") .. " " .. deg(lo), BOLD, wide and 48 or 80))
+    elseif self.next_fetch_at == math.huge then
+        table.insert(weather, txt(self:tr("Loading weather…"), BOLD, 56, GRAY))
     else
         table.insert(weather, txt(self:tr("Weather unavailable"), BOLD, 56, GRAY))
         table.insert(weather, txt(self:tr("Check Wi-Fi · tap to retry"), SANS, 40, GRAY))
