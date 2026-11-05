@@ -189,6 +189,20 @@ function Weather.activeAlert(alerts, now, fmt)
     end
 end
 
+--- Is "local" epoch t inside the night window night = { from = h, to = h } (local hours, [from, to))?
+function Weather.isNight(t, night)
+    local h = tonumber(os.date("!%H", t))
+    return h >= night.from and h < night.to
+end
+
+--- Seconds from "local" epoch t to the next wake-up: the next minute, or at night the next multiple of night.step
+--- minutes (never past the end of the night).
+function Weather.secondsToNextWake(t, night)
+    local m, s = tonumber(os.date("!%M", t)), tonumber(os.date("!%S", t))
+    local step = Weather.isNight(t, night) and night.step or 1
+    return (step - m % step) * 60 - s
+end
+
 --- Moon phase at a UTC epoch: name, illuminated fraction (0..1), icon.
 local MOON_ICON0 = 0xE38D   -- Weather Icons wi-moon-new .. 27 more phases, in order
 function Weather.moon(t)

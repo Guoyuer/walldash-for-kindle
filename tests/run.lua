@@ -65,6 +65,19 @@ name, lit = W.moon(948429600)                -- full moon 2000-01-21 04:40 UTC
 eq("full moon name", name, "Full Moon"); eq("full moon lit", lit > 0.98, true)
 eq("moon icon is 3 bytes", #select(3, W.moon(os.time())), 3)
 
+-- night schedule (2:00-5:00, every 10 min)
+local N = { from = 2, to = 5, step = 10 }
+local at = function(hhmmss) return W.parseISO("2026-11-05T" .. hhmmss:sub(1, 5)) + tonumber(hhmmss:sub(7, 8)) end
+eq("day: next minute", W.secondsToNextWake(at("13:20:15"), N), 45)
+eq("01:59 -> 02:00", W.secondsToNextWake(at("01:59:30"), N), 30)
+eq("02:00 -> 02:10", W.secondsToNextWake(at("02:00:01"), N), 599)
+eq("02:13 -> 02:20", W.secondsToNextWake(at("02:13:20"), N), 400)
+eq("04:50 -> 05:00", W.secondsToNextWake(at("04:50:02"), N), 598)
+eq("05:00 -> 05:01", W.secondsToNextWake(at("05:00:02"), N), 58)
+eq("night 03:00", W.isNight(at("03:00:00"), N), true)
+eq("not night 05:00", W.isNight(at("05:00:00"), N), false)
+eq("not night 01:59", W.isNight(at("01:59:59"), N), false)
+
 -- small helpers
 eq("aqi good", W.aqiLevel(50), "Good"); eq("aqi moderate", W.aqiLevel(51), "Moderate")
 eq("aqi hazardous", W.aqiLevel(400), "Hazardous")
