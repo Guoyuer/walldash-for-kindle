@@ -16,11 +16,12 @@ rc=$?
 [ $rc = 0 ] || exit 1
 
 if [ "$1" = "--shots" ]; then
+  python tools/kctl.py command 'weather ready' || exit 1
   shots_ok=0
   for p in 2 3 4 1; do python tools/kctl.py dash "page $p" "tools/inbox/p$p.png" || shots_ok=1; done
   python tools/kctl.py dash demo tools/inbox/demo.png || shots_ok=1
   python tools/kctl.py command 'demo off' || shots_ok=1
   exit "$shots_ok"
 else
-  python tools/kctl.py dash "page 1" tools/inbox/dash.png
+  python tools/kctl.py dash 'weather ready' tools/inbox/dash.png
 fi

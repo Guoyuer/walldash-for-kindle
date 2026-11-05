@@ -50,7 +50,8 @@ Dev loop: edit -> `sh tools/deploy_dash.sh` -> look at `tools/inbox/dash.png` (`
   (restores the stock UI, can take >3 min) before launching. Never kill KOReader and relaunch immediately: two
   instances fight over the stock UI ("startup script updated" dialog, stuck Home screen; needed a reboot once).
 - Plugin commands go through `/tmp/deskdash_cmd` (polled every second) because KOReader EVIOCGRABs the touchscreen.
-  `kctl dash` waits for a matching repaint acknowledgment before reading the framebuffer. Keep commands serial.
+  `kctl dash` waits for a matching repaint acknowledgment before reading the framebuffer. Deploy screenshots
+  also wait for the first weather attempt. Keep commands serial.
 - Screenshots: `/dev/fb0` holds several frames (6.8 MB, 23 s over Wi-Fi); `kctl` reads only the visible one, gzipped (~35 KB).
 - Remote: private GitHub repo `Guoyuer/kindle-mod` (push after committing). No cloud CI: deploying needs the LAN.
 - Launch KOReader: `setsid /var/local/kmc/bin/kpm launch koreader --asap`. Logs: `/mnt/us/koreader/crash.log`.
@@ -73,9 +74,12 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   model said "Clear" (7 % cloud) while every station reported Cloudy, so don't trust it for the sky.
   Model accuracy study: `docs/weather-accuracy.md` (NBM beats best_match ~2x on temperature here; rerun
   `python tools/verify_forecast.py`)
-  (**must run with `LD_LIBRARY_PATH=`** inside KOReader). Weather glyphs from KOReader's `nerdfonts/symbols.ttf`.
+  (**must run with `LD_LIBRARY_PATH=`** inside KOReader). `deskdash_weather_job.lua` runs Wi-Fi wait and HTTP
+  requests in one subprocess. The UI keeps using cached data and collects results asynchronously.
+  Weather glyphs from KOReader's `nerdfonts/symbols.ttf`.
 - `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details). Swipe = page,
-  tap = refresh, long-press = close. Ticks on each minute; weather every 15 min (retried next minute on failure);
+  tap = refresh, long-press = close. Ticks on each minute; weather every 15 min (failed automatic requests
+  back off from 1 min to at most 15 min);
   flashing full refresh every 30 min; back to page 1 after 2 min idle. Pages 2–4 have page dots and a settings gear for
   language, clock format and orientation. Closing the dashboard restores KOReader's prior orientation.
   Page 1 has no city name, page dots or gear. It shows
@@ -97,7 +101,8 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 - The frontlight comes back on at every resume, so it's turned off before sleeping and restored on an early
   (power-button) wake, on any minute tick that doesn't go back to sleep (e.g. charger plugged in), or when the dashboard closes.
 - Wi-Fi is switched off before each sleep (`lipc-set-prop com.lab126.cmd wirelessEnable 0`) and on only to fetch the
-  weather (~10 s to connect; `waitForWifi()` polls `com.lab126.wifid cmState`, ≤30 s), then off again at the next sleep.
+  weather (~10 s to connect; the worker polls `com.lab126.wifid cmState` for up to 30 s), then off again at the next sleep.
+  The dashboard waits for an in-flight weather job before suspending. The PW4 kernel syncs filesystems on suspend entry.
   `restore()` turns light + Wi-Fi back on when staying awake (power button, charger, dashboard closed). Only Wi-Fi the
   plugin switched off is switched back on.
 - Night (`NIGHT`, local 2:00-5:00): wakes only every 10 minutes (`Weather.secondsToNextWake`) and skips weather
@@ -111,6 +116,9 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 - Bypasses the stock powerd (it keeps `preventScreenSaver 1`); powerd hasn't objected so far.
 
 ## Known quirks / decisions
+
+- Performance baseline, benchmark commands, and battery-test handoff are in
+  [docs/performance-benchmarks.md](docs/performance-benchmarks.md).
 
 - The stock status bar (Wi-Fi/battery; five dashes while Wi-Fi reconnects) sometimes shows in the top-right corner
   even though KOReader stops `awesome` and disables pillow. The user said this is fine; don't spend time on it.

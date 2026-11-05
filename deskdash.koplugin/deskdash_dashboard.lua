@@ -144,7 +144,7 @@ function Dashboard:reportReady()
     UIManager:scheduleIn(1, self._poll)
 end
 
--- Debug/remote control: next|prev|refresh|close|quit|restart|sleep|demo|demo off|page N|tap X Y.
+-- Debug/remote control: next|prev|refresh|weather ready|close|quit|restart|sleep|demo|demo off|page N|tap X Y.
 -- ("demo" shows fake alert/rain/low-battery notices, to check their layout.)
 -- ("sleep" forces one battery-mode sleep even when plugged in; "restart" reloads KOReader + plugin quickly.)
 -- (KOReader grabs the touchscreen, so injected touches can't reach it.)
@@ -193,6 +193,8 @@ function Dashboard:pollCommand()
         elseif cmd == "next" then self:onSwipe(nil, { direction = "west" })
         elseif cmd == "prev" then self:onSwipe(nil, { direction = "east" })
         elseif cmd == "refresh" then self:onTap()
+        elseif cmd == "weather ready" then
+            if self.next_fetch_at == math.huge then self:refreshWeather() end
         elseif cmd == "close" then
             self:onClose()
             if id then self:ackCommand(id, true) end
@@ -212,7 +214,7 @@ function Dashboard:pollCommand()
             if handled then self:onTap(nil, { pos = { x = tonumber(x), y = tonumber(y) } }) end
         end
         Bench.mark(sample, "dispatch")
-        if id and cmd == "refresh" and self.weather_job then
+        if id and (cmd == "refresh" or cmd == "weather ready") and self.weather_job then
             self.weather_job.ack = id
             Bench.finish(sample)
         elseif id then
