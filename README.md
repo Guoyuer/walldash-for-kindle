@@ -7,9 +7,9 @@
 | 目录 | 作用 |
 |---|---|
 | `deskdash.koplugin/` | KOReader 插件：4 页仪表盘（现在 / 逐小时 / 7 天 / 详情），数据来自 Open-Meteo + ip-api |
-| `devagent/` | Kindle 端调试代理：通过 Wi-Fi 轮询电脑上的中继，执行命令、上传截图 |
-| `tools/` | 电脑端：`devserver.py`（中继）、`kctl.py`（命令 / 截图 / 推送）、`deploy_dash.sh`（部署插件） |
-| `documents/` | Kindle 书库里的 scriptlet（Dev Agent 启动 / 停止） |
+| `kdev/` | Kindle 端调试：`sshd.sh`（用 Jobman 自带的 dropbear 起一个只允许密钥登录的 SSH，仅限局域网）、`authorized_keys`、`ktap`（模拟触摸） |
+| `tools/` | 电脑端：`kctl.py`（命令 / 截图 / 推送，走 SSH）、`deploy_dash.sh`（部署插件） |
+| `documents/` | Kindle 书库里的 scriptlet（SSH - Start） |
 
 ## 日常使用
 
@@ -19,15 +19,24 @@
 
 ## 开发 / 调试
 
-1. 电脑上：`python tools/devserver.py`（第一次运行前生成 `tools/.devtoken`，并写入 `devagent/config.sh`：`SRV=http://<电脑IP>:8765`、`TOK=<token>`）
-2. Kindle 上：点 **Dev Agent - Start**
-3. 常用命令：
+SSH 在 KOReader 启动时由插件自动开启；KOReader 没开时可以在书库里点 **SSH - Start**。只接受 `kdev/authorized_keys` 里的密钥，不允许密码登录。
+
+电脑上的 `~/.ssh/config`：
+
+```
+Host kindle
+    HostName 192.168.0.10
+    User root
+    IdentityFile ~/.ssh/kindle_ed25519
+    IdentitiesOnly yes
+```
 
 ```bash
-python tools/kctl.py run "uname -a"
-python tools/kctl.py shot
-python tools/kctl.py dash next        # 给插件发命令：next | prev | refresh | close | page N
+ssh kindle
+python tools/kctl.py shot             # 截图到 tools/inbox/shot.png
+python tools/kctl.py dash next        # 给插件发命令：next | prev | refresh | close | quit | page N
+python tools/kctl.py push kdev/sshd.sh
 sh tools/deploy_dash.sh               # 推送插件并重启 KOReader
 ```
 
-注意：KOReader 会独占触摸屏，所以 `kctl.py tap/swipe` 只在 Kindle 原生界面里有效；插件用 `dash` 命令控制。
+注意：KOReader 会独占触摸屏，所以 `kctl.py tap/swipe` 只在 Kindle 原生界面里有效；插件用 `dash` 命令控制。USB 连电脑时 `/mnt/us` 被卸载，SSH 登录会失败（密钥在 `/mnt/us` 上）。

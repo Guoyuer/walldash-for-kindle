@@ -1,7 +1,0 @@
-#!/bin/sh
-# kget <repo-relative-path> <dest> : download a file from the PC's kindle-mod folder
-url="$SRV/dl?t=$TOK&name=$1"
-if [ "$HTTP" = curl ]; then curl -sf -m 120 -o "$2.part" "$url"
-else wget -q -T 120 -O "$2.part" "$url"; fi
-rc=$?
-if [ $rc -eq 0 ] && [ -s "$2.part" ]; then mv "$2.part" "$2"; echo "got $1 -> $2"; else rm -f "$2.part"; echo "kget failed: $1 (rc=$rc)"; exit 1; fi

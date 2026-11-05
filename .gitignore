@@ -1,6 +1,3 @@
-# secrets (relay token + Kindle-side config containing it)
-tools/.devtoken
-devagent/config.sh
 
 # screenshots, framebuffer dumps, pulled files
 tools/inbox/
