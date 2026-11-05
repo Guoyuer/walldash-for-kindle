@@ -8,6 +8,7 @@
 |---|---|
 | `deskdash.koplugin/` | KOReader 插件：4 页仪表盘（现在 / 逐小时 / 7 天 / 详情），数据来自 Open-Meteo + ip-api |
 | `kdev/` | Kindle 端调试：`sshd.sh`（用 Jobman 自带的 dropbear 起一个只允许密钥登录的 SSH，仅限局域网）、`authorized_keys` |
+| `docs/` | `weather-accuracy.md`：各天气数据源准确度调研（7 天实测对比，`tools/verify_forecast.py` 可复现） |
 | `tools/` | 电脑端：`kctl.py`（命令 / 截图 / 推送，走 SSH）、`deploy_dash.sh`（部署插件，出错自动回滚）、`check.sh`（本地检查 + 测试） |
 | `documents/` | Kindle 书库里的 scriptlet（SSH - Start） |
 

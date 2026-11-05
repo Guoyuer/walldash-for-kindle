@@ -65,7 +65,9 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   **Current conditions come from the nearest NWS station's latest observation** (`Weather.observation`, station
   cached after the first lookup; Queens Plaza -> KNYC Central Park), mapped to a WMO code by `Weather.obsCode`;
   Open-Meteo's modelled `current.weather_code` is only the fallback (>2 h old / unknown text / outside the US). The
-  model said "Clear" (7 % cloud) while every station reported Cloudy, so don't trust it for the sky
+  model said "Clear" (7 % cloud) while every station reported Cloudy, so don't trust it for the sky.
+  Model accuracy study: `docs/weather-accuracy.md` (NBM beats best_match ~2x on temperature here; rerun
+  `python tools/verify_forecast.py`)
   (**must run with `LD_LIBRARY_PATH=`** inside KOReader). Weather glyphs from KOReader's `nerdfonts/symbols.ttf`.
 - `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details). Swipe = page,
   tap = refresh, long-press = close. Ticks on each minute; weather every 15 min (retried next minute on failure);
