@@ -493,6 +493,7 @@ end
 function Dashboard:pageNow()
     local t, d = self:localNow(), self.data
     local wide = self.landscape
+    local column_w = wide and math.floor((self.W - 72) / 2) or self.W - 72
     local date = os.date("!%A, %b ", t) .. tonumber(os.date("!%d", t))
     if self.settings.language == "zh" then
         date = string.format("%d月%d日 %s", tonumber(os.date("!%m", t)), tonumber(os.date("!%d", t)), self:tr(os.date("!%A", t)))
@@ -523,9 +524,18 @@ function Dashboard:pageNow()
         local c, daily = d.current, d.daily
         local day_index, is_today = Weather.firstForecastDay(daily, t)
         local cond, icon = self:currentConditions()
-        table.insert(weather, HorizontalGroup:new{ align = "center",
-            txt(icon, ICONS, wide and 174 or 246 - 20 * extra), hspan(wide and 32 or 60),
-            txt(deg(c.temperature_2m), HEAVY, wide and 198 or 288 - 20 * extra) })
+        local glyph = txt(icon, ICONS, wide and 174 or 246 - 20 * extra)
+        -- Nerd Font weather glyphs can extend past their reported width.
+        local gap = wide and 105 or 140
+        local temp_px = wide and 198 or 288 - 20 * extra
+        local temp = deg(c.temperature_2m)
+        local temperature = txt(temp, HEAVY, temp_px)
+        local available = column_w - glyph:getSize().w - gap
+        local temp_w = temperature:getSize().w
+        if temp_w > available then
+            temperature = txt(temp, HEAVY, math.floor(temp_px * available / temp_w))
+        end
+        table.insert(weather, HorizontalGroup:new{ align = "center", glyph, hspan(gap), temperature })
         table.insert(weather, vspan(wide and -20 or 6 - 3 * extra))
         table.insert(weather, txt(cond, BOLD, wide and 56 or 84, BLACK, wide and math.floor(self.W / 2) - 56 or self.W - 80))
         table.insert(weather, vspan(8))
@@ -540,7 +550,6 @@ function Dashboard:pageNow()
     end
     local g = VerticalGroup:new{ align = "center" }
     if wide then
-        local column_w = math.floor((self.W - 72) / 2)
         local column_h = math.max(clock_block:getSize().h, weather:getSize().h)
         table.insert(g, HorizontalGroup:new{ box(column_w, column_h, clock_block), box(column_w, column_h, weather) })
     else
