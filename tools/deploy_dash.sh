@@ -2,8 +2,8 @@
 # Push the deskdash KOReader plugin to the Kindle over SSH, restart KOReader, then take a screenshot.
 # Usage: sh tools/deploy_dash.sh [--no-restart]
 #
-# KOReader is stopped with the plugin's "quit" command (a normal exit), never killed:
-# killing it lets koreader.sh's restart loop and a second launch fight over the Kindle UI.
+# KOReader is stopped with the plugin's "quit" command (or SIGTERM as a fallback), and only relaunched once it's gone:
+# a second launch while the first is still exiting fights over the Kindle UI.
 cd "$(dirname "$0")/.." || exit 1
 H=${KINDLE_SSH:-kindle}
 P=/mnt/us/koreader/plugins/deskdash.koplugin
@@ -13,8 +13,11 @@ ssh "$H" "cd /mnt/us/koreader && for f in $P/*.lua; do ./luajit -b \$f /dev/null
 ssh "$H" '
 if pgrep -f "[l]uajit ./reader.lua" >/dev/null; then
   echo quit > /tmp/deskdash_cmd
-  i=0; while pgrep -f "[k]oreader.sh" >/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
-  if pgrep -f "[k]oreader.sh" >/dev/null; then echo "KOReader did not exit cleanly (dashboard closed?) - quit it from its menu"; exit 1; fi
+  i=0; while pgrep -f "[k]oreader.sh" >/dev/null && [ $i -lt 30 ]; do sleep 1; i=$((i+1)); done
+  # Plugin not loaded / dashboard closed: SIGTERM is a normal (non-restart) exit for koreader.sh too.
+  if pgrep -f "[k]oreader.sh" >/dev/null; then echo "no response to quit, sending SIGTERM"; kill -TERM $(pgrep -o -f "[l]uajit ./reader.lua"); fi
+  while pgrep -f "[k]oreader.sh" >/dev/null && [ $i -lt 90 ]; do sleep 1; i=$((i+1)); done
+  if pgrep -f "[k]oreader.sh" >/dev/null; then echo "KOReader did not exit - quit it from its menu"; exit 1; fi
   echo "KOReader exited after ${i}s"; sleep 5
 fi
 rm -f /tmp/deskdash_cmd; : > /mnt/us/koreader/crash.log

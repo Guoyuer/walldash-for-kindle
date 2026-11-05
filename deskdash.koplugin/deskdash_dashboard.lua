@@ -36,6 +36,11 @@ local PAGES = 4
 local IDLE_RETURN = 120          -- seconds on another page before returning to "Now"
 local WEATHER_EVERY = 15 * 60    -- seconds between forecast fetches
 local FLASH_EVERY = 30           -- minutes between flashing full refreshes
+-- Battery mode: on battery, suspend to RAM between minute updates (e-ink keeps the picture).
+local AWAKE_AFTER_INPUT = 60     -- stay awake this long after a touch / power-button wake
+local SETTLE = 2                 -- seconds for the e-ink refresh to finish before sleeping
+local RTC = "/dev/rtc1"          -- the wake-capable RTC on the PW4 (snvs)
+local BATTERY_LOG = "/mnt/us/deskdash_battery.log"
 
 -- Font:getFace() scales sizes by DPI; we think in screen pixels.
 local SCALE = Screen:scaleBySize(1000) / 1000
@@ -87,6 +92,7 @@ function Dashboard:init()
     self.last_touch = os.time()
     self._tick = function() self:onTick() end
     self._poll = function() self:pollCommand() end
+    self._sleep = function() self:sleepUntilNextMinute() end
     self:keepAwake(true)
     self:refreshWeather()
     self:rebuild()
@@ -94,7 +100,8 @@ function Dashboard:init()
     UIManager:scheduleIn(1, self._poll)
 end
 
--- Debug/remote control: write one of next|prev|refresh|close|quit|page N to this file.
+-- Debug/remote control: write one of next|prev|refresh|close|quit|sleep|page N to this file.
+-- ("sleep" forces one battery-mode sleep even when plugged in.)
 -- (KOReader grabs the touchscreen, so injected touches can't reach it.)
 local CMD_FILE = "/tmp/deskdash_cmd"
 function Dashboard:pollCommand()
@@ -104,7 +111,8 @@ function Dashboard:pollCommand()
         f:close()
         os.remove(CMD_FILE)
         logger.info("deskdash: command", cmd)
-        if cmd == "next" then self:onSwipe(nil, { direction = "west" })
+        if cmd == "sleep" then self.last_touch = 0; self.force_sleep = true; UIManager:scheduleIn(SETTLE, self._sleep)
+        elseif cmd == "next" then self:onSwipe(nil, { direction = "west" })
         elseif cmd == "prev" then self:onSwipe(nil, { direction = "east" })
         elseif cmd == "refresh" then self:onTap()
         elseif cmd == "close" then self:onClose(); return
@@ -140,6 +148,26 @@ function Dashboard:refreshWeather()
         if data then self.data = data else logger.warn("deskdash: fetch failed", err) end
     end
     self.fetched_at = os.time()
+    self:logBattery()
+end
+
+local function readFile(path)
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local v = f:read("*l"); f:close()
+    return v
+end
+
+function Dashboard:onExternalPower()
+    return readFile("/sys/class/power_supply/bd71827_ac/online") == "1"
+end
+
+function Dashboard:logBattery()
+    local f = io.open(BATTERY_LOG, "a")
+    if not f then return end
+    f:write(string.format("%s battery=%s%% ac=%s\n", os.date("%Y-%m-%d %H:%M"),
+        readFile("/sys/class/power_supply/bd71827_bat/capacity") or "?", self:onExternalPower() and 1 or 0))
+    f:close()
 end
 
 function Dashboard:now()
@@ -358,6 +386,33 @@ function Dashboard:onTick()
     if os.time() - (self.fetched_at or 0) >= WEATHER_EVERY then self:refreshWeather() end
     self:redraw(self.minutes % FLASH_EVERY == 0 and "full" or "ui")
     self:scheduleTick()
+    if self:canSleep() then UIManager:scheduleIn(SETTLE, self._sleep) end
+end
+
+function Dashboard:canSleep()
+    return self.settings.battery_mode and Device:isKindle() and self.page == 1
+        and os.time() - self.last_touch >= AWAKE_AFTER_INPUT and (self.force_sleep or not self:onExternalPower())
+end
+
+-- Suspend to RAM until the next minute. KOReader's timers use a clock that stops while suspended,
+-- so the pending tick is replaced by a direct call after waking.
+function Dashboard:sleepUntilNextMinute()
+    if not self:canSleep() then return end
+    self.force_sleep = nil
+    local secs = 60 - tonumber(os.date("%S"))
+    if secs < 5 then return end   -- too close to the minute; the regular tick handles it
+    local target = os.time() + secs
+    UIManager:unschedule(self._tick)
+    os.execute(string.format("sync; rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
+    local early = target - os.time()
+    if early > 2 then
+        -- woken before the alarm: power button (or suspend refused) -> stay interactive for a while
+        logger.info("deskdash: woke", early, "s early")
+        self.last_touch = os.time()
+        self:scheduleTick()
+    else
+        UIManager:nextTick(self._tick)
+    end
 end
 
 function Dashboard:onSwipe(_, ges)
@@ -385,6 +440,7 @@ end
 function Dashboard:onClose()
     UIManager:unschedule(self._tick)
     UIManager:unschedule(self._poll)
+    UIManager:unschedule(self._sleep)
     self:keepAwake(false)
     UIManager:close(self, "full")
     return true
@@ -393,6 +449,7 @@ end
 function Dashboard:onCloseWidget()
     UIManager:unschedule(self._tick)
     UIManager:unschedule(self._poll)
+    UIManager:unschedule(self._sleep)
 end
 
 return Dashboard
