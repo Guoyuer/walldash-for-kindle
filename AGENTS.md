@@ -34,7 +34,7 @@ sh tools/deploy_dash.sh [--no-restart]  # push plugin, luajit syntax check, rest
 
 - Plugin commands go through `/tmp/deskdash_cmd` (polled every second) because injected touches can't reach KOReader.
 - `deploy_dash.sh` stops KOReader with `quit` (or SIGTERM if the plugin isn't loaded) and **waits for `koreader.sh` to
-  finish before relaunching**. Never kill KOReader and relaunch immediately: two instances fight over the stock UI, and
+  finish before relaunching** (can take >3 min; if it gives up, check `ps` and relaunch by hand). Never kill KOReader and relaunch immediately: two instances fight over the stock UI, and
   you get a "startup script updated" dialog and a stuck Home screen (needed a reboot once).
 - Launch KOReader: `setsid /var/local/kmc/bin/kpm launch koreader --asap`. Logs: `/mnt/us/koreader/crash.log`.
 
@@ -61,8 +61,8 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   `/dev/rtc1` (snvs) is the wake-capable RTC; rtc0 isn't. Measured awake time ≈ 2–3 s per minute.
 - KOReader timers use a clock that stops during suspend, so the pending tick is unscheduled and called directly on wake.
 - Waking more than 2 s early = power button (or USB plug-in) → stays awake/interactive for 60 s. Touch can't wake it.
-- The frontlight comes back on at every resume, so it's turned off before sleeping and restored only on an early
-  (power-button) wake or when the dashboard closes.
+- The frontlight comes back on at every resume, so it's turned off before sleeping and restored on an early
+  (power-button) wake, on any minute tick that doesn't go back to sleep (e.g. charger plugged in), or when the dashboard closes.
 - Wi-Fi drops during suspend and reassociates ~2 s after resume; `waitForWifi()` polls `lipc-get-prop com.lab126.wifid cmState` (≤20 s) before fetching.
 - `/mnt/us/deskdash_battery.log`: battery % at each weather fetch. The `sleep` command forces one cycle even when plugged in.
 - Bypasses the stock powerd (it keeps `preventScreenSaver 1`); powerd hasn't objected so far.
