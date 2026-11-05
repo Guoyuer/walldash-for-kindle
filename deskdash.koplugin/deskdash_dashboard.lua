@@ -40,7 +40,14 @@ local HEAVY = BOLD   -- big numerals (KOReader can't see the Kindle's Amazon Emb
 
 local PAGES = 4
 local IDLE_RETURN = 120          -- seconds on another page before returning to "Now"
-local WEATHER_EVERY = 15 * 60    -- seconds between forecast fetches
+-- Weather fetches run at fixed wall-clock minutes, a few minutes after NWS stations' hourly reports (~:51-:56).
+-- Each one switches Wi-Fi on for ~10 s, the most expensive thing in battery mode, so it is half as often there.
+local WEATHER_STEP = 15          -- minutes between fetches when plugged in
+local WEATHER_STEP_BATTERY = 30  -- minutes between fetches on battery
+local WEATHER_SLOT = 3           -- slot offset in minutes: :03, :18, :33, :48 (battery: :03, :33)
+local WEATHER_GAP = 5 * 60       -- a manual refresh doesn't trigger another fetch within this many seconds
+local WEATHER_RETRY_MAX = 15 * 60  -- failed automatic fetches back off from 1 min to this
+local AQ_EVERY = 55 * 60         -- the CAMS AQI estimate is hourly; fetch it at most this often
 local FLASH_EVERY = 30           -- flashing full refresh when the minute is a multiple of this
 -- Battery mode: on battery, suspend to RAM between minute updates (e-ink keeps the picture).
 local AWAKE_AFTER_INPUT = 60     -- stay awake this long after a touch / power-button wake
@@ -239,7 +246,9 @@ function Dashboard:refreshWeather(manual)
     local job = { initial = self.next_fetch_at == math.huge, manual = manual }
     self.pw.fetches = self.pw.fetches + 1
     self:setWifi(true)
-    local pid, err = WeatherJob.start(self.settings, self.offset, self.station, Device:isKindle(), self.benchmark)
+    local pid, err = WeatherJob.start{ settings = self.settings, offset = self.offset, station = self.station,
+        kindle = Device:isKindle(), benchmark = self.benchmark,
+        want_aq = manual or not self.aq_at or os.time() - self.aq_at >= AQ_EVERY }
     if not pid then
         logger.warn("deskdash: weather worker failed to start", err)
         self:finishWeather(job)
@@ -260,7 +269,7 @@ function Dashboard:finishWeather(job, result)
         end
         self.data = result.data or self.data
         self.alerts = result.alerts or self.alerts
-        self.aq = result.aq or self.aq
+        if result.aq then self.aq, self.aq_at = result.aq, os.time() end
         self.obs = result.obs or self.obs
         self.station = result.station or self.station
     end
@@ -268,9 +277,12 @@ function Dashboard:finishWeather(job, result)
         self.weather_retry = nil
     else
         self.pw.fails = self.pw.fails + 1
-        self.weather_retry = math.min((self.weather_retry or 30) * 2, WEATHER_EVERY)
+        self.weather_retry = math.min((self.weather_retry or 30) * 2, WEATHER_RETRY_MAX)
     end
-    self.next_fetch_at = os.time() + (self.weather_retry or WEATHER_EVERY)
+    local step = self:onExternalPower() and WEATHER_STEP or WEATHER_STEP_BATTERY
+    self.next_fetch_at = os.time()
+        + (self.weather_retry or Weather.secondsToSlot(self:localNow(), step, WEATHER_SLOT, WEATHER_GAP))
+    logger.info("deskdash: next weather at", os.date("!%H:%M", self.next_fetch_at - os.time() + self:localNow()))
     if job.initial then self:logPower("start") end
     self:redraw(job.manual and "full" or "ui")
     if job.ack then self:ackCommand(job.ack, self.page_ok) end

@@ -78,8 +78,10 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   requests in one subprocess. The UI keeps using cached data and collects results asynchronously.
   Weather glyphs from KOReader's `nerdfonts/symbols.ttf`.
 - `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details). Swipe = page,
-  tap = refresh, long-press = close. Ticks on each minute; weather every 15 min (failed automatic requests
-  back off from 1 min to at most 15 min);
+  tap = refresh, long-press = close. Ticks on each minute; weather at fixed wall-clock slots a few minutes
+  after NWS stations report: :03/:18/:33/:48 plugged in, :03/:33 on battery (`WEATHER_STEP*`, `Weather.secondsToSlot`;
+  failed automatic requests back off from 1 min to at most 15 min). The worker sends forecast, alerts, observation
+  and AQI as parallel `curl`s (`Weather.curlAll`); AQI only when the cached value is ≥ 55 min old;
   flashing full refresh every 30 min; back to page 1 after 2 min idle. Pages 2–4 have page dots and a settings gear for
   language, clock format and orientation. Closing the dashboard restores KOReader's prior orientation.
   Page 1 has no city name, page dots or gear. It shows

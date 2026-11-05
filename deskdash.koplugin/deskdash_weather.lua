@@ -18,6 +18,33 @@ local function curl(url, headers)
     return body
 end
 
+--- Runs requests ({ url = , headers = }) at the same time, so Wi-Fi stays on for the slowest one instead of
+--- the sum. Returns the bodies in order (nil for a failed request). prefix names the temporary files.
+function Weather.curlAll(requests, prefix)
+    local cmd = { "export LD_LIBRARY_PATH=;" }
+    for i, r in ipairs(requests) do
+        cmd[#cmd + 1] = string.format("curl -s -f -m 20 %s '%s' >%s%d 2>/dev/null &", r.headers or "", r.url, prefix, i)
+    end
+    cmd[#cmd + 1] = "wait"
+    os.execute(table.concat(cmd, " "))
+    local bodies = {}
+    for i = 1, #requests do
+        local f = io.open(prefix .. i, "rb")
+        if f then
+            local body = f:read("*a")
+            f:close()
+            if body ~= "" then bodies[i] = body end
+        end
+        os.remove(prefix .. i)
+    end
+    return bodies
+end
+
+local function decode(body)
+    local ok, t = pcall(json.decode, body or "")
+    if ok and type(t) == "table" then return t end
+end
+
 --- UTF-8 for a BMP code point (LuaJIT has no \u{} escapes).
 local function U(cp)
     return string.char(0xE0 + math.floor(cp / 4096), 0x80 + math.floor(cp / 64) % 64, 0x80 + cp % 64)
@@ -151,32 +178,37 @@ function Weather.selectForecast(t)
     }
 end
 
---- Fetches the forecast. Returns a table, or nil + error.
-function Weather.fetch(lat, lon, units)
-    local url = string.format(
+function Weather.forecastRequest(lat, lon, units)
+    return { url = string.format(
         "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
         .. "&current=" .. table.concat(CURRENT, ",")
         .. "&hourly=" .. table.concat(HOURLY, ",")
         .. "&daily=" .. table.concat(DAILY, ",") .. ",sunrise,sunset,uv_index_max"
         .. "&models=best_match,ncep_nbm_conus"
         .. "&timezone=auto&forecast_days=7&forecast_hours=13%s",
-        lat, lon, units == "imperial" and "&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch" or "")
-    local body = curl(url)
+        lat, lon, units == "imperial" and "&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch" or "") }
+end
+
+--- Forecast response body -> table, or nil + error.
+function Weather.parseForecast(body)
     if not body then return nil, "no response" end
-    local ok, t = pcall(json.decode, body)
-    if not ok or type(t) ~= "table" or type(t.current) ~= "table" then
-        logger.warn("deskdash: bad forecast", body and body:sub(1, 200))
+    local t = decode(body)
+    if not t or type(t.current) ~= "table" then
+        logger.warn("deskdash: bad forecast", body:sub(1, 200))
         return nil, "bad response"
     end
     return Weather.selectForecast(t)
 end
 
 --- Current US AQI estimate from Open-Meteo's CAMS model.
-function Weather.airQuality(lat, lon)
-    local body = curl(string.format(
-        "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=%.4f&longitude=%.4f&current=us_aqi", lat, lon))
-    local ok, t = pcall(json.decode, body or "")
-    local c = ok and type(t) == "table" and t.current
+function Weather.airQualityRequest(lat, lon)
+    return { url = string.format(
+        "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=%.4f&longitude=%.4f&current=us_aqi", lat, lon) }
+end
+
+function Weather.parseAirQuality(body)
+    local t = decode(body)
+    local c = t and t.current
     if type(c) == "table" and type(c.us_aqi) == "number" then
         return c.us_aqi
     end
@@ -190,10 +222,12 @@ function Weather.aqiLevel(aqi)
 end
 
 local NWS_HEADERS = "-H 'User-Agent: deskdash-kindle' -H 'Accept: application/geo+json'"
+local function nwsRequest(path)
+    return { url = "https://api.weather.gov" .. path, headers = NWS_HEADERS }
+end
 local function nws(path)
-    local body = curl("https://api.weather.gov" .. path, NWS_HEADERS)
-    local ok, t = pcall(json.decode, body or "")
-    if ok and type(t) == "table" then return t end
+    local r = nwsRequest(path)
+    return decode(curl(r.url, r.headers))
 end
 
 --- NWS observation text ("Mostly Cloudy", "Light Rain and Fog/Mist", ...) -> WMO weather code, or nil if unknown.
@@ -215,19 +249,23 @@ function Weather.obsCode(text)
     if has("clear") or has("sunny") or has("fair") then return 0 end
 end
 
---- Latest observation at the NWS station nearest to lat/lon (US only): { text, code, t = UTC epoch } or nil.
---- cache (a table kept by the caller) remembers the station so later calls need one request.
-function Weather.observation(lat, lon, cache)
-    if not cache.station then
-        local pt = nws(string.format("/points/%.4f,%.4f", lat, lon))
-        local url = pt and pt.properties and pt.properties.observationStations
-        local st = type(url) == "string" and nws(url:gsub("^https://api.weather.gov", "") .. "?limit=1")
-        local f = st and st.features and st.features[1]
-        local station = f and f.properties and f.properties.stationIdentifier
-        if type(station) ~= "string" then return nil end
-        cache.station = station
-    end
-    local o = nws("/stations/" .. cache.station .. "/observations/latest")
+--- NWS station nearest to lat/lon (US only), or nil. Two requests; the caller caches the result.
+function Weather.findStation(lat, lon)
+    local pt = nws(string.format("/points/%.4f,%.4f", lat, lon))
+    local url = pt and pt.properties and pt.properties.observationStations
+    local st = type(url) == "string" and nws(url:gsub("^https://api.weather.gov", "") .. "?limit=1")
+    local f = st and st.features and st.features[1]
+    local station = f and f.properties and f.properties.stationIdentifier
+    if type(station) == "string" then return station end
+end
+
+function Weather.observationRequest(station)
+    return nwsRequest("/stations/" .. station .. "/observations/latest")
+end
+
+--- Latest-observation body -> { text, code, t = UTC epoch, station } or nil.
+function Weather.parseObservation(body, station)
+    local o = decode(body)
     local p = o and o.properties
     if not (p and type(p.textDescription) == "string" and p.textDescription ~= "" and type(p.timestamp) == "string") then
         return nil
@@ -236,14 +274,18 @@ function Weather.observation(lat, lon, cache)
     local observed_at = Weather.parseWallTime(p.timestamp:sub(1, 16))
     if not observed_at then return nil end
     return { text = p.textDescription, code = Weather.obsCode(p.textDescription),
-             t = observed_at, station = cache.station }
+             t = observed_at, station = station }
 end
 
 --- Active US National Weather Service alerts for a point: list of { event, ends = "2026-11-05T18:00:00-05:00" }
 --- (most severe first), {} if none, nil on error (e.g. outside the US).
 local SEVERITY = { Extreme = 1, Severe = 2, Moderate = 3, Minor = 4 }
-function Weather.alerts(lat, lon)
-    local t = nws(string.format("/alerts/active?point=%.4f,%.4f", lat, lon))
+function Weather.alertsRequest(lat, lon)
+    return nwsRequest(string.format("/alerts/active?point=%.4f,%.4f", lat, lon))
+end
+
+function Weather.parseAlerts(body)
+    local t = decode(body)
     if not (t and type(t.features) == "table") then return nil end
     local list = {}
     for _, f in ipairs(t.features) do
@@ -329,6 +371,13 @@ function Weather.secondsToNextWake(t, night)
     local m, s = tonumber(os.date("!%M", t)), tonumber(os.date("!%S", t))
     local step = Weather.isNight(t, night) and night.step or 1
     return (step - m % step) * 60 - s
+end
+
+--- Seconds from "local" epoch t to the next weather slot: wall-clock minutes offset, offset + step, ... (step divides
+--- 60), at least gap seconds away. E.g. step 30, offset 3 -> :03 and :33, a few minutes after NWS stations report.
+function Weather.secondsToSlot(t, step, offset, gap)
+    local s, o = step * 60, offset * 60
+    return (math.floor((t + gap - o) / s) + 1) * s + o - t
 end
 
 --- Moon phase at a UTC epoch: name, illuminated fraction (0..1), icon.
