@@ -1,6 +1,6 @@
 --[[--
 Full-screen dashboard widget: 4 swipeable pages (Now / Hourly / 7-Day / Details).
-Swipe left/right: change page. Swipe down: close. Tap: refresh now.
+Swipe left/right: change page. Long-press: close. Tap: refresh now.
 ]]
 local Blitbuffer = require("ffi/blitbuffer")
 local CenterContainer = require("ui/widget/container/centercontainer")
@@ -78,6 +78,8 @@ function Dashboard:init()
     self.ges_events = {
         Swipe = { GestureRange:new{ ges = "swipe", range = self.dimen } },
         Tap = { GestureRange:new{ ges = "tap", range = self.dimen } },
+        -- Closing needs a deliberate long-press, so a stray swipe on the wall can't exit.
+        Hold = { GestureRange:new{ ges = "hold", range = self.dimen } },
     }
     HEAVY = HEAVY or BOLD
     self.page = 1
@@ -359,9 +361,12 @@ function Dashboard:onSwipe(_, ges)
     if dir == "west" or dir == "east" then
         self.page = (self.page - 1 + (dir == "west" and 1 or -1)) % PAGES + 1
         self:redraw("partial")
-    elseif dir == "south" then
-        self:onClose()
     end
+    return true
+end
+
+function Dashboard:onHold()
+    self:onClose()
     return true
 end
 

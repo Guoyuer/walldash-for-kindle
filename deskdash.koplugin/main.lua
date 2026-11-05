@@ -28,11 +28,34 @@ function DeskDash:init()
         category = "none", event = "ShowDeskDash", title = _("Desk dashboard"), general = true,
     })
     self.ui.menu:registerToMainMenu(self)
+    UIManager.event_hook:registerWidget("InputEvent", self)
+    DeskDash._instance = self   -- the plugin is re-instantiated per FileManager/ReaderUI; keep the live one
     -- Auto-open once per KOReader run, on top of whatever KOReader opened (file browser or last book).
     if setting("autostart", true) and not DeskDash._autostarted then
         DeskDash._autostarted = true
         UIManager:scheduleIn(1, function() self:onShowDeskDash() end)
+        UIManager:scheduleIn(60, DeskDash._watchdog)
     end
+end
+
+-- If the dashboard was closed and nobody touches the screen for REOPEN_IDLE seconds, bring it back
+-- (unless a book is open in KOReader).
+local REOPEN_IDLE = 5 * 60
+DeskDash._last_input = os.time()
+
+function DeskDash:onInputEvent()
+    DeskDash._last_input = os.time()
+end
+
+function DeskDash._watchdog()
+    if not DeskDash._dash and setting("autostart", true) and DeskDash._instance then
+        local ReaderUI = package.loaded["apps/reader/readerui"]
+        local reading = ReaderUI and ReaderUI.instance
+        if not reading and os.time() - DeskDash._last_input >= REOPEN_IDLE then
+            DeskDash._instance:onShowDeskDash()
+        end
+    end
+    UIManager:scheduleIn(60, DeskDash._watchdog)
 end
 
 function DeskDash:addToMainMenu(menu_items)
@@ -63,8 +86,8 @@ function DeskDash:addToMainMenu(menu_items)
 end
 
 function DeskDash:onShowDeskDash()
-    if self.dash then return true end
-    self.dash = Dashboard:new{
+    if DeskDash._dash then return true end
+    local dash = Dashboard:new{
         weather = Weather,
         settings = {
             units = setting("units", "metric"),
@@ -72,9 +95,15 @@ function DeskDash:onShowDeskDash()
             lat = setting("lat", nil), lon = setting("lon", nil), city = setting("city", nil),
         },
     }
-    local orig_close = self.dash.onClose
-    self.dash.onClose = function(d) orig_close(d); self.dash = nil; return true end
-    UIManager:show(self.dash, "full")
+    local orig_close = dash.onClose
+    dash.onClose = function(d)
+        orig_close(d)
+        DeskDash._dash = nil
+        DeskDash._last_input = os.time()   -- the reopen countdown starts when it's closed
+        return true
+    end
+    DeskDash._dash = dash
+    UIManager:show(dash, "full")
     return true
 end
 
