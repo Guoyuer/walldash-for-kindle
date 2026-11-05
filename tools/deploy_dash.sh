@@ -16,9 +16,11 @@ rc=$?
 [ $rc = 0 ] || exit 1
 
 if [ "$1" = "--shots" ]; then
-  for p in 2 3 4 1; do python tools/kctl.py dash "page $p" "tools/inbox/p$p.png"; done
-  python tools/kctl.py dash demo tools/inbox/demo.png      # page 1 with fake alert / rain / low-battery notices
-  python tools/kctl.py run "echo 'demo off' > /tmp/deskdash_cmd"
+  shots_ok=0
+  for p in 2 3 4 1; do python tools/kctl.py dash "page $p" "tools/inbox/p$p.png" || shots_ok=1; done
+  python tools/kctl.py dash demo tools/inbox/demo.png || shots_ok=1
+  python tools/kctl.py command 'demo off' || shots_ok=1
+  exit "$shots_ok"
 else
-  python tools/kctl.py shot tools/inbox/dash.png
+  python tools/kctl.py dash "page 1" tools/inbox/dash.png
 fi
