@@ -530,7 +530,7 @@ function Dashboard:pageNow()
         local temp_px = wide and 198 or 288 - 20 * extra
         local temp = deg(c.temperature_2m)
         local temperature = txt(temp, HEAVY, temp_px)
-        local available = column_w - glyph:getSize().w - gap
+        local available = column_w - glyph:getSize().w - gap - 8  -- allow for font-size rounding
         local temp_w = temperature:getSize().w
         if temp_w > available then
             temperature = txt(temp, HEAVY, math.floor(temp_px * available / temp_w))
