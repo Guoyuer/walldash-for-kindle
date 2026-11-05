@@ -355,7 +355,7 @@ function Dashboard:pageHourly()
     local first = Weather.firstForecastHour(h, now)
     local last = math.min(first + 11, #h.time - 1)
     if first > last then table.insert(g, txt("Forecast unavailable", SANS, 48, GRAY)); return g end
-    local rowW, rowH = self.W - 160, 88
+    local rowW, rowH = self.W - 88, 88
     for i = first, last do
         local t = parseISO(h.time[i])
         local is_now = i == first and t <= now
@@ -402,7 +402,7 @@ function Dashboard:pageDaily()
     for i = 1, n do
         min_all = math.min(min_all, d.temperature_2m_min[i]); max_all = math.max(max_all, d.temperature_2m_max[i])
     end
-    local rowW, rowH = self.W - 120, 132
+    local rowW, rowH = self.W - 120, 150
     for i = 1, n do
         local _, icon = Weather.describe(d.weather_code[i], true)
         local day = (i == 1) and "Today" or os.date("!%a", parseISO(d.time[i]))
@@ -464,7 +464,7 @@ function Dashboard:pageDetails()
     local uv = day.uv_index_max and day.uv_index_max[1]
     local tiles = {
         self:tile(I.thermometer, "FEELS LIKE", deg(c.apparent_temperature),
-            math.abs(diff) < 2 and "Similar to actual" or (diff < 0 and "Colder than actual" or "Warmer than actual"), tw, th),
+            math.abs(diff) >= 2 and (diff < 0 and "Colder than actual" or "Warmer than actual"), tw, th),
         self:tile(I.humidity, "HUMIDITY", math.floor(c.relative_humidity_2m + 0.5) .. "%",
             c.dew_point_2m and ("Dew point " .. deg(c.dew_point_2m)), tw, th),
         self:tile(I.wind, "WIND", tostring(math.floor(c.wind_speed_10m + 0.5)),
