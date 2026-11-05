@@ -45,11 +45,15 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 - `main.lua`: menu/settings (`deskdash_*` in KOReader settings: autostart, clock_24h, battery_mode, units), opens the
   dashboard at KOReader start, reopens it after 5 idle minutes, starts sshd. Plugin-local modules must be `require`d
   at load time and are prefixed `deskdash_` to avoid name clashes.
-- `deskdash_weather.lua`: Open-Meteo forecast + ip-api location/UTC offset, via the system `curl`
+- `deskdash_weather.lua`: Open-Meteo forecast (incl. 15-min precipitation for the "Rain starting around…" line) +
+  Open-Meteo air quality (US AQI) + NWS alerts (api.weather.gov, US only; nil elsewhere) + computed moon phase +
+  ip-api location/UTC offset, via the system `curl`
   (**must run with `LD_LIBRARY_PATH=`** inside KOReader). Weather glyphs from KOReader's `nerdfonts/symbols.ttf`.
 - `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details). Swipe = page,
   tap = refresh, long-press = close. Ticks on each minute; weather every 15 min (retried next minute on failure);
-  flashing full refresh every 30 min; back to page 1 after 2 min idle.
+  flashing full refresh every 30 min; back to page 1 after 2 min idle. Page 1 has no city name (user's choice); it shows
+  an alert line and a precipitation line when there is one. On battery at <= 20 % a "Charge me" badge appears bottom-left.
+  Details = 8 tiles (feels like, humidity, wind, UV, precipitation, AQI, next sun event, moon).
   - Times: Kindle clock is UTC; `now()` adds the API's `utc_offset_seconds`; always format with `os.date("!...")`.
   - Layout gotcha: `FrameContainer:getSize()` ignores width/height → use the `fixed(w, h)` child helper.
   - Low-contrast e-ink: secondary text is 0x33 gray, not lighter. Fonts: NotoSans Regular/Bold (KOReader can't see Amazon Ember).

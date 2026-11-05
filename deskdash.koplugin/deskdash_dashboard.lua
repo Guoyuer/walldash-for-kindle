@@ -38,6 +38,7 @@ local WEATHER_EVERY = 15 * 60    -- seconds between forecast fetches
 local FLASH_EVERY = 30           -- minutes between flashing full refreshes
 -- Battery mode: on battery, suspend to RAM between minute updates (e-ink keeps the picture).
 local AWAKE_AFTER_INPUT = 60     -- stay awake this long after a touch / power-button wake
+local LOW_BATTERY = 20           -- % at which a "charge me" badge appears (on battery only)
 local RTC = "/dev/rtc1"          -- the wake-capable RTC on the PW4 (snvs)
 
 -- Font:getFace() scales sizes by DPI; we think in screen pixels.
@@ -147,6 +148,10 @@ function Dashboard:refreshWeather()
     if s.lat and s.lon then
         local data, err = W.fetch(s.lat, s.lon, s.units)
         if data then self.data = data; ok = true else logger.warn("deskdash: fetch failed", err) end
+        if ok then   -- extras: keep the previous value if one of these fails
+            self.aq = W.airQuality(s.lat, s.lon) or self.aq
+            self.alerts = W.alerts(s.lat, s.lon) or self.alerts
+        end
     end
     -- On failure, try again at the next minute instead of waiting a full WEATHER_EVERY.
     self.fetched_at = ok and os.time() or (os.time() - WEATHER_EVERY + 60)
@@ -196,6 +201,10 @@ function Dashboard:onExternalPower()
     return readFile("/sys/class/power_supply/bd71827_ac/online") == "1"
 end
 
+function Dashboard:batteryLevel()
+    return tonumber(readFile("/sys/class/power_supply/bd71827_bat/capacity") or "")
+end
+
 function Dashboard:now()
     local off = (self.data and self.data.utc_offset_seconds) or self.offset or 0
     return os.time() + off   -- "local" epoch; always format with "!"
@@ -212,6 +221,43 @@ local function parseISO(s) -- "2026-11-05T13:00" or "2026-11-05" -> "local" epoc
     -- os.time() reads the table as local time; undo the system TZ so results behave like UTC
     local utc = os.date("!*t", t); utc.isdst = false
     return t + (t - os.time(utc))
+end
+
+local SNOW_CODES = { [71] = true, [73] = true, [75] = true, [77] = true, [85] = true, [86] = true }
+
+-- iOS-style precipitation summary: "Rain starting around 3:15", "Rain stopping around 4:00", "Snow likely around 18:00".
+function Dashboard:precipLine()
+    local d = self.data
+    if not d then return nil end
+    local word = SNOW_CODES[d.current.weather_code] and "Snow" or "Rain"
+    local m = d.minutely_15
+    if m and m.precipitation and #m.precipitation > 0 then
+        local th = (d.minutely_15_units and d.minutely_15_units.precipitation == "inch") and 0.004 or 0.1
+        local wet_now = (m.precipitation[1] or 0) >= th
+        for i = 2, #m.precipitation do
+            if ((m.precipitation[i] or 0) >= th) ~= wet_now then
+                return string.format("%s %s around %s", word, wet_now and "stopping" or "starting", self:hhmm(parseISO(m.time[i])))
+            end
+        end
+        if wet_now then return word .. " for the next 2 hours" end
+    end
+    local h = d.hourly
+    for i = 3, math.min(13, #h.time) do   -- beyond the 15-minute window
+        local p, code = h.precipitation_probability and h.precipitation_probability[i], h.weather_code[i]
+        if p and p >= 60 and code >= 51 then
+            return string.format("%s likely around %s", SNOW_CODES[code] and "Snow" or "Rain", self:hhmm(parseISO(h.time[i])))
+        end
+    end
+end
+
+-- Most severe active NWS alert, e.g. "Wind Advisory until 18:00" (nil if none).
+function Dashboard:alertLine()
+    local now = self:now()
+    for _, a in ipairs(self.alerts or {}) do
+        local ends = a.ends and parseISO(a.ends:sub(1, 16))
+        if not ends then return a.event end
+        if ends > now then return a.event .. " until " .. self:hhmm(ends) end
+    end
 end
 
 -- ---------------------------------------------------------------- pages
@@ -242,12 +288,13 @@ end
 function Dashboard:pageNow()
     local t, d = self:now(), self.data
     local date = os.date("!%A, %B ", t) .. tonumber(os.date("!%d", t))
+    local alert, precip = self:alertLine(), self:precipLine()
+    local extra = (alert and 1 or 0) + (precip and 1 or 0)   -- make room for the notice lines
     local g = VerticalGroup:new{ align = "center",
-        vspan(70),
-        txt(self.settings.city or " ", SANS, 40, GRAY),
+        vspan(70 - 15 * extra),
         txt(self:hhmm(t), HEAVY, 330),
         txt(date, BOLD, 64),
-        vspan(70),
+        vspan(70 - 25 * extra),
     }
     if d then
         local c, today = d.current, d.daily
@@ -258,6 +305,16 @@ function Dashboard:pageNow()
         table.insert(g, txt(cond, BOLD, 66))
         table.insert(g, vspan(14))
         table.insert(g, txt("H " .. deg(today.temperature_2m_max[1]) .. "    L " .. deg(today.temperature_2m_min[1]), SANS, 54, GRAY))
+        local I = self.weather.ICON
+        if alert or precip then table.insert(g, vspan(26)) end
+        if alert then
+            table.insert(g, HorizontalGroup:new{ align = "center", txt(I.warning, ICONS, 40), hspan(16),
+                txt(alert, BOLD, 40, BLACK, self.W - 160) })
+        end
+        if precip then
+            table.insert(g, HorizontalGroup:new{ align = "center", txt(I.umbrella, ICONS, 40, GRAY), hspan(16),
+                txt(precip, SANS, 40, GRAY, self.W - 160) })
+        end
     else
         table.insert(g, txt("Weather unavailable", BOLD, 56, GRAY))
         table.insert(g, txt("Check Wi-Fi · tap to retry", SANS, 40, GRAY))
@@ -336,15 +393,14 @@ function Dashboard:pageDaily()
 end
 
 function Dashboard:tile(icon, label, value, sub, w, h)
-    local border, pl, pt = 3, 32, 26
+    local border, pl, pt = 3, 32, 18
     return FrameContainer:new{
         radius = 28, bordersize = border, color = BLACK, background = WHITE,
         padding = 0, padding_left = pl, padding_top = pt, margin = 0,
         fixed(w - 2 * border - pl, h - 2 * border - pt, VerticalGroup:new{ align = "left",
-            HorizontalGroup:new{ align = "center", box(54, 50, txt(icon, ICONS, 40, GRAY), "left"), txt(label, BOLD, 32, GRAY) },
-            vspan(10),
-            txt(value, HEAVY, 96),
-            vspan(4),
+            HorizontalGroup:new{ align = "center", box(54, 44, txt(icon, ICONS, 40, GRAY), "left"), txt(label, BOLD, 32, GRAY) },
+            vspan(2),
+            txt(value, HEAVY, 72),
             txt(sub or " ", SANS, 34, GRAY, w - 60),
         }),
     }
@@ -356,24 +412,56 @@ function Dashboard:pageDetails()
     if not d then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
     local W, c, day, I = self.weather, d.current, d.daily, self.weather.ICON
     local units = (d.current_units and d.current_units.wind_speed_10m) or "km/h"
-    local tw, th, gap = math.floor((self.W - 80 - 36) / 2), 300, 36
-    local sunrise, sunset = parseISO(day.sunrise[1]), parseISO(day.sunset[1])
+    local punits = (d.daily_units and d.daily_units.precipitation_sum) or "mm"
+    local tw, th, gap = math.floor((self.W - 80 - 22) / 2), 252, 22
+    local now = self:now()
     local diff = c.apparent_temperature - c.temperature_2m
+    local function amount(v)
+        if not v then return "--" end
+        return (punits == "inch" and string.format("%.2f", v) or string.format("%g", math.floor(v * 10 + 0.5) / 10)) .. " " .. punits
+    end
+    -- Sun: show the next event big and the other one small (like iOS).
+    local rise1, set1 = parseISO(day.sunrise[1]), parseISO(day.sunset[1])
+    local sun_label, sun_icon, sun_value, sun_sub
+    if now < rise1 or now >= set1 then
+        local rise = (now >= set1 and day.sunrise[2]) and parseISO(day.sunrise[2]) or rise1
+        sun_label, sun_icon, sun_value, sun_sub = "SUNRISE", I.sunrise, self:hhmm(rise), "Sunset " .. self:hhmm(set1)
+    else
+        sun_label, sun_icon, sun_value, sun_sub = "SUNSET", I.sunset, self:hhmm(set1), "Sunrise " .. self:hhmm(rise1)
+    end
+    local moon_name, moon_lit, moon_icon = W.moon(os.time())
+    local aq = self.aq
     local tiles = {
         self:tile(I.thermometer, "FEELS LIKE", deg(c.apparent_temperature),
             math.abs(diff) < 2 and "Similar to actual" or (diff < 0 and "Colder than actual" or "Warmer than actual"), tw, th),
-        self:tile(I.humidity, "HUMIDITY", math.floor(c.relative_humidity_2m + 0.5) .. "%", nil, tw, th),
+        self:tile(I.humidity, "HUMIDITY", math.floor(c.relative_humidity_2m + 0.5) .. "%",
+            c.dew_point_2m and ("Dew point " .. deg(c.dew_point_2m)), tw, th),
         self:tile(I.wind, "WIND", tostring(math.floor(c.wind_speed_10m + 0.5)),
-            units .. "  " .. W.compass(c.wind_direction_10m), tw, th),
+            units .. " " .. W.compass(c.wind_direction_10m)
+            .. (c.wind_gusts_10m and (" · Gusts " .. math.floor(c.wind_gusts_10m + 0.5)) or ""), tw, th),
         self:tile(I.uv, "UV INDEX", tostring(math.floor(day.uv_index_max[1] + 0.5)), W.uvLevel(day.uv_index_max[1]), tw, th),
-        self:tile(I.sunrise, "SUNRISE", self:hhmm(sunrise), nil, tw, th),
-        self:tile(I.sunset, "SUNSET", self:hhmm(sunset), nil, tw, th),
+        self:tile(I.umbrella, "PRECIPITATION", amount(day.precipitation_sum and day.precipitation_sum[1]),
+            "Tomorrow " .. amount(day.precipitation_sum and day.precipitation_sum[2]), tw, th),
+        self:tile(I.smog, "AIR QUALITY", aq and tostring(math.floor(aq.aqi + 0.5)) or "--",
+            aq and W.aqiLevel(aq.aqi) or "Unavailable", tw, th),
+        self:tile(sun_icon, sun_label, sun_value, sun_sub, tw, th),
+        self:tile(moon_icon, "MOON", math.floor(moon_lit * 100 + 0.5) .. "%", moon_name, tw, th),
     }
-    for r = 0, 2 do
+    for r = 0, 3 do
         table.insert(g, HorizontalGroup:new{ tiles[r * 2 + 1], hspan(gap), tiles[r * 2 + 2] })
-        if r < 2 then table.insert(g, vspan(gap)) end
+        if r < 3 then table.insert(g, vspan(gap)) end
     end
     return g
+end
+
+-- Low-battery warning in the bottom-left corner, level with the page dots (only on battery, at <= LOW_BATTERY %).
+function Dashboard:batteryBadge()
+    local pct = Device:isKindle() and self:batteryLevel()
+    if not pct or pct > LOW_BATTERY or self:onExternalPower() then return nil end
+    local I = self.weather.ICON
+    return HorizontalGroup:new{ align = "center", overlap_offset = { 40, self.H - 96 },
+        txt(pct <= 5 and I.battery_empty or I.battery_low, ICONS, 40), hspan(24),
+        txt(pct .. "%  Charge me", BOLD, 34) }
 end
 
 function Dashboard:rebuild()
@@ -390,6 +478,7 @@ function Dashboard:rebuild()
             CenterContainer:new{ dimen = Geom:new{ w = self.W, h = self.H - 120 }, ignore_if_over = "height",
                 overlap_offset = { 0, 0 }, VerticalGroup:new{ align = "center", content } },
             CenterContainer:new{ dimen = Geom:new{ w = self.W, h = 40 }, overlap_offset = { 0, self.H - 90 }, self:dots() },
+            self:batteryBadge(),
         },
     }
 end
