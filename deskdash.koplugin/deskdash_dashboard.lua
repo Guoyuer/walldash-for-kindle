@@ -300,23 +300,23 @@ function Dashboard:pageNow()
     local precip = self.data and Weather.precipSummary(self.data, function(t) return self:hhmm(t) end)
     if self.demo then alert, precip = "Wind Advisory until 18:00", "Rain starting around 15:30" end
     local extra = (alert and 1 or 0) + (precip and 1 or 0)   -- make room for the notice lines
+    -- Big type: NotoSans digits are tabular, so "00:00" is as wide as "14:55" (~995 px of 1072 at 400 px).
     local g = VerticalGroup:new{ align = "center",
-        vspan(70 - 15 * extra),
-        txt(self:hhmm(t), HEAVY, 330),
-        txt(date, BOLD, 64),
-        vspan(70 - 25 * extra),
+        txt(self:hhmm(t), HEAVY, 400 - 30 * extra),   -- each notice line takes room from the clock and weather row
+        txt(date, BOLD, 74),
+        vspan(60 - 25 * extra),
     }
     if d then
         local c, today = d.current, d.daily
         local cond, icon = Weather.describe(c.weather_code, c.is_day == 1)
         table.insert(g, HorizontalGroup:new{ align = "center",
-            txt(icon, ICONS, 190), hspan(90), txt(deg(c.temperature_2m), HEAVY, 210) })
-        table.insert(g, vspan(30))
-        table.insert(g, txt(cond, BOLD, 66))
-        table.insert(g, vspan(14))
-        table.insert(g, txt("H " .. deg(today.temperature_2m_max[1]) .. "    L " .. deg(today.temperature_2m_min[1]), SANS, 54, GRAY))
+            txt(icon, ICONS, 230 - 20 * extra), hspan(90), txt(deg(c.temperature_2m), HEAVY, 260 - 20 * extra) })
+        table.insert(g, vspan(24 - 8 * extra))
+        table.insert(g, txt(cond, BOLD, 78))
+        table.insert(g, vspan(8))
+        table.insert(g, txt("H " .. deg(today.temperature_2m_max[1]) .. "    L " .. deg(today.temperature_2m_min[1]), BOLD, 72))
         local I = Weather.ICON
-        if alert or precip then table.insert(g, vspan(26)) end
+        if alert or precip then table.insert(g, vspan(20)) end
         if alert then
             table.insert(g, HorizontalGroup:new{ align = "center", txt(I.warning, ICONS, 40), hspan(16),
                 txt(alert, BOLD, 40, BLACK, self.W - 160) })
