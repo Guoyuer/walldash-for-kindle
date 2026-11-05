@@ -81,8 +81,9 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   Page 1 has no city name, page dots or gear. It shows
   an alert line and a precipitation line when there is one. On battery at <= 20 % a "Charge me" badge appears bottom-left.
   Details = 8 tiles (feels like, humidity, wind, UV, precipitation, AQI, next sun event, moon).
-  - Times: Kindle clock is UTC. `localNow()` adds the API's UTC offset to match `parseWallTime`'s offset-free
-    forecast timestamps. Format those values with `os.date("!...")` and use `os.time()` for elapsed time.
+  - Times: `localNow()` adds the API's UTC offset to the UTC clock to match `parseWallTime`'s offset-free
+    forecast timestamps. Before geolocation it uses the Kindle's configured time zone. Format those values
+    with `os.date("!...")` and use `os.time()` for elapsed time.
   - Layout gotcha: `FrameContainer:getSize()` ignores width/height → use the `fixed(w, h)` child helper.
   - Low-contrast e-ink: secondary text is 0x33 gray, not lighter. Fonts: NotoSans Regular/Bold (KOReader can't see Amazon Ember).
 
