@@ -63,7 +63,10 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 - Waking more than 2 s early = power button (or USB plug-in) → stays awake/interactive for 60 s. Touch can't wake it.
 - The frontlight comes back on at every resume, so it's turned off before sleeping and restored on an early
   (power-button) wake, on any minute tick that doesn't go back to sleep (e.g. charger plugged in), or when the dashboard closes.
-- Wi-Fi drops during suspend and reassociates ~2 s after resume; `waitForWifi()` polls `lipc-get-prop com.lab126.wifid cmState` (≤20 s) before fetching.
+- Wi-Fi is switched off before each sleep (`lipc-set-prop com.lab126.cmd wirelessEnable 0`) and on only to fetch the
+  weather (~10 s to connect; `waitForWifi()` polls `com.lab126.wifid cmState`, ≤30 s), then off again at the next sleep.
+  `restore()` turns light + Wi-Fi back on when staying awake (power button, charger, dashboard closed). Only Wi-Fi the
+  plugin switched off is switched back on.
 - The `sleep` command forces one cycle even when plugged in.
 - Bypasses the stock powerd (it keeps `preventScreenSaver 1`); powerd hasn't objected so far.
 
