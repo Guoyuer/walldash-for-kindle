@@ -117,6 +117,16 @@ eq("night 03:00", W.isNight(at("03:00:00"), N), true)
 eq("not night 05:00", W.isNight(at("05:00:00"), N), false)
 eq("not night 01:59", W.isNight(at("01:59:59"), N), false)
 
+-- weather slots (step, offset minutes, gap seconds)
+eq("battery slot :33", W.secondsToSlot(at("13:20:15"), 30, 3, 300), 12 * 60 + 45)
+eq("fetch at :03 -> :33", W.secondsToSlot(at("13:03:15"), 30, 3, 300), 29 * 60 + 45)
+eq("manual :31 skips :33", W.secondsToSlot(at("13:31:00"), 30, 3, 300), 32 * 60)
+eq("plugged slot :18", W.secondsToSlot(at("13:03:10"), 15, 3, 300), 14 * 60 + 50)
+eq("slot crosses midnight", os.date("!%H:%M", at("23:50:00") + W.secondsToSlot(at("23:50:00"), 30, 3, 300)), "00:03")
+eq("missing forecast body", select(2, W.parseForecast(nil)), "no response")
+eq("missing alerts body", W.parseAlerts(nil), nil)
+eq("missing AQI body", W.parseAirQuality(nil), nil)
+
 -- NWS observation text -> WMO code
 eq("obs cloudy", W.obsCode("Cloudy"), 3); eq("obs mostly cloudy", W.obsCode("Mostly Cloudy"), 3)
 eq("obs partly", W.obsCode("Partly Cloudy"), 2); eq("obs clear", W.obsCode("Clear"), 0); eq("obs sunny", W.obsCode("Sunny"), 0)

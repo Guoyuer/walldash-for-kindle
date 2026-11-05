@@ -8,6 +8,7 @@ local Weather = require("deskdash_weather")
 local Job = {}
 local PATH = "/tmp/deskdash_weather."
 
+-- Polls 4x a second: Wi-Fi is the most expensive thing the dashboard does, so don't keep it on waiting for a poll.
 local function waitForWifi()
     local deadline = time.now() + time.s(30)
     repeat
@@ -15,16 +16,18 @@ local function waitForWifi()
         local state = p and p:read("*l")
         if p then p:close() end
         if state == "CONNECTED" then return true end
-        os.execute("sleep 1")
+        ffiutil.usleep(250000)
     until time.now() >= deadline
     logger.warn("deskdash: Wi-Fi not connected after 30 s")
     return false
 end
 
-local function collect(settings, offset, station, kindle, benchmark)
-    local sample = Bench.start(benchmark, "weather")
+-- opts: settings, offset, station, kindle, benchmark, want_aq
+local function collect(opts, pid)
+    local settings = opts.settings
+    local sample = Bench.start(opts.benchmark, "weather")
     local wifi_started = time.now()
-    local connected = not kindle or waitForWifi()
+    local connected = not opts.kindle or waitForWifi()
     local result = { wifi_s = time.to_number(time.since(wifi_started)) }
     Bench.mark(sample, "wifi")
     if not connected then
@@ -33,7 +36,7 @@ local function collect(settings, offset, station, kindle, benchmark)
     end
 
     local lat, lon = settings.lat, settings.lon
-    if not (lat and lon and offset) then
+    if not (lat and lon and opts.offset) then
         local loc = Weather.locate()
         if loc then
             lat, lon = lat or loc.lat, lon or loc.lon
@@ -42,28 +45,29 @@ local function collect(settings, offset, station, kindle, benchmark)
     end
     Bench.mark(sample, "locate")
     if lat and lon then
-        local data, err = Weather.fetch(lat, lon, settings.units)
-        result.data = data
-        Bench.mark(sample, "forecast")
+        local station = opts.station or Weather.findStation(lat, lon)   -- once; the dashboard caches it
+        result.station = station
+        Bench.mark(sample, "station")
+        local requests = { Weather.forecastRequest(lat, lon, settings.units), Weather.alertsRequest(lat, lon) }
+        local obs_i, aq_i
+        if station then table.insert(requests, Weather.observationRequest(station)); obs_i = #requests end
+        if opts.want_aq then table.insert(requests, Weather.airQualityRequest(lat, lon)); aq_i = #requests end
+        local bodies = Weather.curlAll(requests, PATH .. pid .. ".http.")
+        Bench.mark(sample, "http")
+        local data, err = Weather.parseForecast(bodies[1])
         if not data then logger.warn("deskdash: fetch failed", err) end
-        result.alerts = Weather.alerts(lat, lon)
-        Bench.mark(sample, "alerts")
-        if data then
-            result.aq = Weather.airQuality(lat, lon)
-            Bench.mark(sample, "aqi")
-            local cache = { station = station }
-            result.obs = Weather.observation(lat, lon, cache)
-            result.station = cache.station
-            Bench.mark(sample, "observation")
-        end
+        result.data = data
+        result.alerts = Weather.parseAlerts(bodies[2])
+        result.obs = obs_i and Weather.parseObservation(bodies[obs_i], station)
+        result.aq = aq_i and Weather.parseAirQuality(bodies[aq_i])
     end
     Bench.finish(sample)
     return result
 end
 
-function Job.start(settings, offset, station, kindle, benchmark)
+function Job.start(opts)
     return ffiutil.runInSubProcess(function(pid)
-        local result = collect(settings, offset, station, kindle, benchmark)
+        local result = collect(opts, pid)
         local encoded = buffer.encode(result)
         local file = assert(io.open(PATH .. pid, "wb"))
         file:write(encoded)
