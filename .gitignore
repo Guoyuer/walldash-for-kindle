@@ -1,0 +1,11 @@
+# secrets (relay token + Kindle-side config containing it)
+tools/.devtoken
+devagent/config.sh
+
+# screenshots, framebuffer dumps, pulled files
+tools/inbox/
+
+# KOReader source pulled from the device for API reference
+ref/
+
+__pycache__/

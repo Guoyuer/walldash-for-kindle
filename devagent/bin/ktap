@@ -1,0 +1,41 @@
+#!/bin/sh
+# ktap X Y [hold_ms]   : inject a single-finger tap (multitouch protocol B) into the touchscreen
+# ktap swipe X1 Y1 X2 Y2 [steps]
+DEV=${KTAP_DEV:-/dev/input/event2}
+# optional axis mapping, set after calibration: KTAP_SWAP=1 swaps x/y, KTAP_FLIPX/FLIPY=<max> mirror
+[ -f /mnt/us/devagent/ktap.conf ] && . /mnt/us/devagent/ktap.conf
+
+le() { # little-endian printf escapes for unsigned value $1 in $2 bytes
+  v=$1; n=$2; s=""; i=0
+  while [ $i -lt $n ]; do s="$s\\$(printf %03o $(( v & 255 )))"; v=$(( v >> 8 )); i=$((i + 1)); done
+  printf %s "$s"
+}
+Z='\000\000\000\000\000\000\000\000'          # timeval (32-bit armv7): kernel fills it in
+ev() { # ev type code value  (value -1 allowed)
+  if [ "$3" = -1 ]; then val='\377\377\377\377'; else val=$(le "$3" 4); fi
+  printf %s "$Z$(le "$1" 2)$(le "$2" 2)$val"
+}
+EV_SYN=0; EV_ABS=3
+SLOT=47; MAJOR=48; PX=53; PY=54; TID=57; PRES=58
+
+map() { # map x y -> sets MX MY using ktap.conf options
+  MX=$1; MY=$2
+  [ -n "$KTAP_SWAP" ] && { t=$MX; MX=$MY; MY=$t; }
+  [ -n "$KTAP_FLIPX" ] && MX=$(( KTAP_FLIPX - MX ))
+  [ -n "$KTAP_FLIPY" ] && MY=$(( KTAP_FLIPY - MY ))
+}
+down() { map "$1" "$2"; printf "$(ev $EV_ABS $SLOT 0)$(ev $EV_ABS $TID 4242)$(ev $EV_ABS $PX $MX)$(ev $EV_ABS $PY $MY)$(ev $EV_ABS $PRES 60)$(ev $EV_ABS $MAJOR 8)$(ev $EV_SYN 0 0)" > "$DEV"; }
+move() { map "$1" "$2"; printf "$(ev $EV_ABS $SLOT 0)$(ev $EV_ABS $PX $MX)$(ev $EV_ABS $PY $MY)$(ev $EV_SYN 0 0)" > "$DEV"; }
+up()   { printf "$(ev $EV_ABS $SLOT 0)$(ev $EV_ABS $TID -1)$(ev $EV_SYN 0 0)" > "$DEV"; }
+
+if [ "$1" = swipe ]; then
+  x1=$2; y1=$3; x2=$4; y2=$5; n=${6:-10}
+  down "$x1" "$y1"; i=1
+  while [ $i -le $n ]; do
+    usleep 20000
+    move $(( x1 + (x2 - x1) * i / n )) $(( y1 + (y2 - y1) * i / n )); i=$((i + 1))
+  done
+  usleep 30000; up; echo "swipe $x1,$y1 -> $x2,$y2"
+else
+  down "$1" "$2"; usleep $(( ${3:-80} * 1000 )); up; echo "tap $1,$2 (dev $MX,$MY)"
+fi

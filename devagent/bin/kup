@@ -1,0 +1,4 @@
+#!/bin/sh
+# kup <name> < data : upload stdin to the dev relay inbox as <name>
+cat > /tmp/kup.$$ && sh "$(dirname "$0")/kpost" "file?name=$1" /tmp/kup.$$
+rc=$?; rm -f /tmp/kup.$$; exit $rc
