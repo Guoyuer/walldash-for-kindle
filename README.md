@@ -15,7 +15,8 @@
 
 - 开机后在 Kindle 书库里点 **KOReader**，仪表盘会自动打开。
 - 左右滑动翻页；长按关闭（回到 KOReader，闲置 5 分钟后自动回来）；点一下立即刷新天气。
-- 设置：KOReader 菜单 → 工具 → Desk dashboard（自动打开、24 小时制、华氏度）。
+- 设置：KOReader 菜单 → 工具 → Desk dashboard（自动打开、24 小时制、电池模式、华氏度）。
+- **电池模式**（默认开）：不插电时，每分钟画完就睡到下一分钟（`rtcwake`，墨水屏断电保持画面）。睡眠中触屏无效，**按一下电源键**唤醒，可滑动 60 秒；离开首页或刚碰过屏幕时不睡。插着电时常亮。电量记录在 `/mnt/us/deskdash_battery.log`（每次更新天气记一行）。
 
 ## 开发 / 调试
 
@@ -34,7 +35,7 @@ Host kindle
 ```bash
 ssh kindle
 python tools/kctl.py shot             # 截图到 tools/inbox/shot.png
-python tools/kctl.py dash next        # 给插件发命令：next | prev | refresh | close | quit | page N
+python tools/kctl.py dash next        # 给插件发命令：next | prev | refresh | close | quit | sleep | page N
 python tools/kctl.py push kdev/sshd.sh
 sh tools/deploy_dash.sh               # 推送插件并重启 KOReader
 ```
