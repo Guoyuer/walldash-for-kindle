@@ -59,8 +59,10 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 - `main.lua`: menu/settings (`deskdash_*` in KOReader settings: autostart, clock_24h, battery_mode, units), opens the
   dashboard at KOReader start, reopens it after 5 idle minutes, starts sshd. Plugin-local modules must be `require`d
   at load time and are prefixed `deskdash_` to avoid name clashes.
-- `deskdash_weather.lua`: Open-Meteo forecast (incl. 15-min precipitation for the "Rain starting around…" line) +
-  Open-Meteo air quality (US AQI) + NWS alerts (api.weather.gov, US only; nil elsewhere) + computed moon phase +
+- `deskdash_weather.lua`: one Open-Meteo request for `best_match` and NBM. Hourly and daily forecasts use NBM together,
+  with a whole-forecast fallback to `best_match`. The homepage precipitation hint uses the same hourly interval
+  and probability as the hourly page. Current model estimates and daily UV come from `best_match`.
+  CAMS AQI (labelled as an estimate) + NWS alerts (api.weather.gov, US only; fetched even if the forecast fails) + computed moon phase +
   ip-api location/UTC offset, via the system `curl`.
   **Current conditions come from the nearest NWS station's latest observation** (`Weather.observation`, station
   cached after the first lookup; Queens Plaza -> KNYC Central Park), mapped to a WMO code by `Weather.obsCode`;

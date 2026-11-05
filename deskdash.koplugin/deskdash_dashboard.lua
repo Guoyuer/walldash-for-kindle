@@ -146,6 +146,8 @@ end
 
 function Dashboard:refreshWeather()
     local W, s = Weather, self.settings
+    self:setWifi(true)
+    self:waitForWifi()
     if not (s.lat and s.lon) or not self.offset then
         local loc = W.locate()
         if loc then
@@ -153,15 +155,13 @@ function Dashboard:refreshWeather()
             self.offset = loc.offset
         end
     end
-    self:setWifi(true)
-    self:waitForWifi()
     local ok = false
     if s.lat and s.lon then
         local data, err = W.fetch(s.lat, s.lon, s.units)
         if data then self.data = data; ok = true else logger.warn("deskdash: fetch failed", err) end
-        if ok then   -- extras: keep the previous value if one of these fails
+        self.alerts = W.alerts(s.lat, s.lon) or self.alerts
+        if ok then
             self.aq = W.airQuality(s.lat, s.lon) or self.aq
-            self.alerts = W.alerts(s.lat, s.lon) or self.alerts
             self.nws = self.nws or {}
             self.obs = W.observation(s.lat, s.lon, self.nws) or self.obs
         end
@@ -284,13 +284,13 @@ function Dashboard:dots()
     return g
 end
 
-function Dashboard:header(title)
+function Dashboard:header(title, note)
     local s = self.settings
     return VerticalGroup:new{ align = "center",
         vspan(70),
         txt(title, BOLD, 46, BLACK),
         vspan(8),
-        txt((s.city or "") .. "  ·  " .. self:hhmm(self:now()), SANS, 34, GRAY),
+        txt((s.city or "") .. "  ·  " .. self:hhmm(self:now()) .. (note and "  ·  " .. note or ""), SANS, 34, GRAY, self.W - 80),
         vspan(40),
     }
 end
@@ -310,9 +310,10 @@ end
 function Dashboard:pageNow()
     local t, d = self:now(), self.data
     local date = os.date("!%A, %B ", t) .. tonumber(os.date("!%d", t))
-    local alert = Weather.activeAlert(self.alerts, self:now(), function(t) return self:hhmm(t) end)
-    local precip = self.data and Weather.precipSummary(self.data, function(t) return self:hhmm(t) end)
-    if self.demo then alert, precip = "Wind Advisory until 18:00", "Rain starting around 15:30" end
+    local function fmt(at) return self:hhmm(at) end
+    local alert = Weather.activeAlert(self.alerts, t, fmt)
+    local precip = d and Weather.precipSummary(d.hourly, t, fmt)
+    if self.demo then alert, precip = "Wind Advisory until 18:00", "16:00–17:00 · 70% precip" end
     local extra = (alert and 1 or 0) + (precip and 1 or 0)   -- make room for the notice lines
     -- Big type: NotoSans digits are tabular, so "00:00" is as wide as "14:55" (~995 px of 1072 at 400 px).
     local g = VerticalGroup:new{ align = "center",
@@ -329,19 +330,19 @@ function Dashboard:pageNow()
         table.insert(g, txt(cond, BOLD, 78, BLACK, self.W - 80))
         table.insert(g, vspan(8))
         table.insert(g, txt("H " .. deg(today.temperature_2m_max[1]) .. "    L " .. deg(today.temperature_2m_min[1]), BOLD, 72))
-        local I = Weather.ICON
-        if alert or precip then table.insert(g, vspan(20)) end
-        if alert then
-            table.insert(g, HorizontalGroup:new{ align = "center", txt(I.warning, ICONS, 40), hspan(16),
-                txt(alert, BOLD, 40, BLACK, self.W - 160) })
-        end
-        if precip then
-            table.insert(g, HorizontalGroup:new{ align = "center", txt(I.umbrella, ICONS, 40, GRAY), hspan(16),
-                txt(precip, SANS, 40, GRAY, self.W - 160) })
-        end
     else
         table.insert(g, txt("Weather unavailable", BOLD, 56, GRAY))
         table.insert(g, txt("Check Wi-Fi · tap to retry", SANS, 40, GRAY))
+    end
+    local I = Weather.ICON
+    if alert or precip then table.insert(g, vspan(20)) end
+    if alert then
+        table.insert(g, HorizontalGroup:new{ align = "center", txt(I.warning, ICONS, 40), hspan(16),
+            txt(alert, BOLD, 40, BLACK, self.W - 160) })
+    end
+    if precip then
+        table.insert(g, HorizontalGroup:new{ align = "center", txt(I.umbrella, ICONS, 40, GRAY), hspan(16),
+            txt(precip, SANS, 40, GRAY, self.W - 160) })
     end
     return g
 end
@@ -350,20 +351,26 @@ function Dashboard:pageHourly()
     local g = self:header("HOURLY FORECAST")
     local h = self.data and self.data.hourly
     if not h then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
+    local now = self:now()
+    local first = Weather.firstForecastHour(h, now)
+    local last = math.min(first + 11, #h.time - 1)
+    if first > last then table.insert(g, txt("Forecast unavailable", SANS, 48, GRAY)); return g end
     local rowW, rowH = self.W - 160, 88
-    for i = 1, math.min(12, #h.time) do
+    for i = first, last do
         local t = parseISO(h.time[i])
+        local is_now = i == first and t <= now
         local _, icon = Weather.describe(h.weather_code[i], h.is_day and h.is_day[i] == 1)
-        if i == 1 then _, icon = self:currentConditions() end
-        local p = h.precipitation_probability and h.precipitation_probability[i]
-        local label = (i == 1) and "Now" or self:hhmm(t)
+        if is_now then _, icon = self:currentConditions() end
+        local p = Weather.hourlyPrecipChance(h, i)
+        local label = is_now and "Now" or self:hhmm(t)
+        local temperature = is_now and self.data.current.temperature_2m or h.temperature_2m[i]
         table.insert(g, HorizontalGroup:new{ align = "center",
-            box(260, rowH, txt(label, i == 1 and BOLD or SANS, 50), "left"),
+            box(260, rowH, txt(label, is_now and BOLD or SANS, 50), "left"),
             box(170, rowH, txt(icon, ICONS, 64)),
             box(200, rowH, txt((p and p >= 10) and (p .. "%") or "", SANS, 40, GRAY), "right"),
-            box(rowW - 630, rowH, txt(deg(h.temperature_2m[i]), BOLD, 54), "right"),
+            box(rowW - 630, rowH, txt(deg(temperature), BOLD, 54), "right"),
         })
-        if i < 12 then table.insert(g, LineWidget:new{ dimen = Geom:new{ w = rowW, h = 2 }, background = LIGHT }) end
+        if i < last then table.insert(g, LineWidget:new{ dimen = Geom:new{ w = rowW, h = 2 }, background = LIGHT }) end
     end
     return g
 end
@@ -387,7 +394,7 @@ function Dashboard:rangeBar(w, lo, hi, min_all, max_all, now_t)
 end
 
 function Dashboard:pageDaily()
-    local g = self:header("7-DAY FORECAST")
+    local g = self:header("7-DAY FORECAST", "Peak hourly precip %")
     local d = self.data and self.data.daily
     if not d then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
     local n = math.min(7, #d.time)
@@ -456,6 +463,7 @@ function Dashboard:pageDetails()
     end
     local moon_name, moon_lit, moon_icon = W.moon(os.time())
     local aq = self.aq
+    local uv = day.uv_index_max and day.uv_index_max[1]
     local tiles = {
         self:tile(I.thermometer, "FEELS LIKE", deg(c.apparent_temperature),
             math.abs(diff) < 2 and "Similar to actual" or (diff < 0 and "Colder than actual" or "Warmer than actual"), tw, th),
@@ -464,11 +472,12 @@ function Dashboard:pageDetails()
         self:tile(I.wind, "WIND", tostring(math.floor(c.wind_speed_10m + 0.5)),
             units .. " " .. W.compass(c.wind_direction_10m)
             .. (c.wind_gusts_10m and (" · Gusts " .. math.floor(c.wind_gusts_10m + 0.5)) or ""), tw, th),
-        self:tile(I.uv, "UV INDEX", tostring(math.floor(day.uv_index_max[1] + 0.5)), W.uvLevel(day.uv_index_max[1]), tw, th),
-        self:tile(I.umbrella, "PRECIPITATION", amount(day.precipitation_sum and day.precipitation_sum[1]),
+        self:tile(I.uv, "UV MAX TODAY", type(uv) == "number" and tostring(math.floor(uv + 0.5)) or "--",
+            type(uv) == "number" and W.uvLevel(uv) or "Unavailable", tw, th),
+        self:tile(I.umbrella, "PRECIP FORECAST", amount(day.precipitation_sum and day.precipitation_sum[1]),
             "Tomorrow " .. amount(day.precipitation_sum and day.precipitation_sum[2]), tw, th),
-        self:tile(I.smog, "AIR QUALITY", aq and tostring(math.floor(aq.aqi + 0.5)) or "--",
-            aq and W.aqiLevel(aq.aqi) or "Unavailable", tw, th),
+        self:tile(I.smog, "AQI ESTIMATE", aq and tostring(math.floor(aq + 0.5)) or "--",
+            aq and W.aqiLevel(aq) or "Unavailable", tw, th),
         self:tile(sun_icon, sun_label, sun_value, sun_sub, tw, th),
         self:tile(moon_icon, "MOON", math.floor(moon_lit * 100 + 0.5) .. "%", moon_name, tw, th),
     }
