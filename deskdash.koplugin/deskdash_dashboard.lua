@@ -94,7 +94,7 @@ function Dashboard:init()
     UIManager:scheduleIn(1, self._poll)
 end
 
--- Debug/remote control: write one of next|prev|refresh|close|page N to this file.
+-- Debug/remote control: write one of next|prev|refresh|close|quit|page N to this file.
 -- (KOReader grabs the touchscreen, so injected touches can't reach it.)
 local CMD_FILE = "/tmp/deskdash_cmd"
 function Dashboard:pollCommand()
@@ -108,6 +108,11 @@ function Dashboard:pollCommand()
         elseif cmd == "prev" then self:onSwipe(nil, { direction = "east" })
         elseif cmd == "refresh" then self:onTap()
         elseif cmd == "close" then self:onClose(); return
+        elseif cmd == "quit" then
+            -- Clean KOReader exit (same as menu > Exit), so koreader.sh restores the Kindle UI properly.
+            self:onClose()
+            UIManager:quit()
+            return
         elseif cmd:match("^page %d$") then self.page = tonumber(cmd:sub(6)); self:redraw("partial") end
     end
     UIManager:scheduleIn(1, self._poll)
