@@ -28,7 +28,7 @@ sh tools/check.sh                       # < 1 s, no Kindle: compile all plugin f
 sh tools/deploy_dash.sh [--shots]       # ~12 s: check -> upload -> restart -> verify -> auto-rollback -> screenshot
 python tools/kctl.py run "cmd"          # ssh
 python tools/kctl.py shot [out.png]     # screenshot (~2.5 s) -> tools/inbox/shot.png (needs Pillow)
-python tools/kctl.py dash next|prev|refresh|close|demo|"page N" [out.png]
+python tools/kctl.py dash next|prev|refresh|close|demo|"page N"|"tap X Y" [out.png]
 python tools/kctl.py command quit|restart|sleep|"demo off"
 python tools/kctl.py push file ...      # repo-relative -> same path under /mnt/us
 ```
@@ -59,7 +59,7 @@ Dev loop: edit -> `sh tools/deploy_dash.sh` -> look at `tools/inbox/dash.png` (`
 
 KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Menu: Tools > Desk dashboard.
 
-- `main.lua`: menu/settings (`deskdash_*` in KOReader settings: autostart, clock_24h, battery_mode, units), opens the
+- `main.lua`: reads saved dashboard options from KOReader settings (`deskdash_*`), opens the
   dashboard at KOReader start, reopens it after 5 idle minutes, starts sshd. Plugin-local modules must be `require`d
   at load time and are prefixed `deskdash_` to avoid name clashes.
 - `deskdash_weather.lua`: one Open-Meteo request for `best_match` and NBM. Hourly and daily forecasts use NBM together,
@@ -76,7 +76,9 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   (**must run with `LD_LIBRARY_PATH=`** inside KOReader). Weather glyphs from KOReader's `nerdfonts/symbols.ttf`.
 - `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details). Swipe = page,
   tap = refresh, long-press = close. Ticks on each minute; weather every 15 min (retried next minute on failure);
-  flashing full refresh every 30 min; back to page 1 after 2 min idle. Page 1 has no city name (user's choice); it shows
+  flashing full refresh every 30 min; back to page 1 after 2 min idle. Pages 2–4 have page dots and a settings gear for
+  language, clock format and orientation. Closing the dashboard restores KOReader's prior orientation.
+  Page 1 has no city name, page dots or gear. It shows
   an alert line and a precipitation line when there is one. On battery at <= 20 % a "Charge me" badge appears bottom-left.
   Details = 8 tiles (feels like, humidity, wind, UV, precipitation, AQI, next sun event, moon).
   - Times: Kindle clock is UTC. `localNow()` adds the API's UTC offset to match `parseWallTime`'s offset-free

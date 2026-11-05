@@ -77,7 +77,7 @@ def shot(out, before=""):
         img = Image.frombuffer("RGBA", (w, h), raw, "raw", "BGRA", stride, 1).convert("RGB")
     img = img.crop((0, 0, min(int(os.environ.get("KINDLE_W", "1072")), w), h))
     if int(rotation):
-        img = img.rotate(int(rotation) * 90, expand=True)
+        img = img.rotate(-int(rotation) * 90, expand=True)
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
     img.save(out)
     print(f"saved {out} ({img.size[0]}x{img.size[1]})")
