@@ -3,7 +3,7 @@
 # ktap swipe X1 Y1 X2 Y2 [steps]
 DEV=${KTAP_DEV:-/dev/input/event2}
 # optional axis mapping, set after calibration: KTAP_SWAP=1 swaps x/y, KTAP_FLIPX/FLIPY=<max> mirror
-[ -f /mnt/us/devagent/ktap.conf ] && . /mnt/us/devagent/ktap.conf
+[ -f /mnt/us/kdev/ktap.conf ] && . /mnt/us/kdev/ktap.conf
 
 le() { # little-endian printf escapes for unsigned value $1 in $2 bytes
   v=$1; n=$2; s=""; i=0

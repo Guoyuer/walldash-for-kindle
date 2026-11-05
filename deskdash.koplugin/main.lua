@@ -33,6 +33,8 @@ function DeskDash:init()
     -- Auto-open once per KOReader run, on top of whatever KOReader opened (file browser or last book).
     if setting("autostart", true) and not DeskDash._autostarted then
         DeskDash._autostarted = true
+        -- Start the key-only SSH server for remote maintenance (no-op if it's running or not installed).
+        os.execute("[ -f /mnt/us/kdev/sshd.sh ] && LD_LIBRARY_PATH= setsid sh /mnt/us/kdev/sshd.sh >/dev/null 2>&1 </dev/null &")
         UIManager:scheduleIn(1, function() self:onShowDeskDash() end)
         UIManager:scheduleIn(60, DeskDash._watchdog)
     end

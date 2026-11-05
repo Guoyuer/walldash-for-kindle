@@ -1,8 +1,0 @@
-#!/bin/sh
-# kpost <endpoint-with-query> <file> : POST a file to the dev relay
-case "$1" in *\?*) url="$SRV/$1&t=$TOK" ;; *) url="$SRV/$1?t=$TOK" ;; esac
-if [ "$HTTP" = curl ]; then
-  curl -s -m 120 --data-binary @"$2" -H "Content-Type: application/octet-stream" "$url" > /dev/null
-else
-  wget -q -T 120 -O /dev/null --header "Content-Type: application/octet-stream" --post-file="$2" "$url"
-fi
