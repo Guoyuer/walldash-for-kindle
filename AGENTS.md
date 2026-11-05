@@ -26,16 +26,16 @@ User-facing docs are in `README.md` (Chinese). This file is the setup/context an
 ```bash
 python tools/kctl.py run "cmd"          # ssh
 python tools/kctl.py shot [out.png]     # framebuffer screenshot -> tools/inbox/shot.png (needs Pillow)
-python tools/kctl.py dash next|prev|refresh|close|quit|sleep|"page N" [out.png]   # plugin command + screenshot
+python tools/kctl.py dash next|prev|refresh|close|quit|restart|sleep|"page N" [out.png]   # plugin command + screenshot
 python tools/kctl.py push file ...      # repo-relative -> same path under /mnt/us
-python tools/kctl.py tap X Y / swipe X1 Y1 X2 Y2   # injected touch: stock UI only (KOReader EVIOCGRABs the touchscreen)
 sh tools/deploy_dash.sh [--no-restart]  # push plugin, luajit syntax check, restart KOReader, check crash.log, screenshot
 ```
 
-- Plugin commands go through `/tmp/deskdash_cmd` (polled every second) because injected touches can't reach KOReader.
-- `deploy_dash.sh` stops KOReader with `quit` (or SIGTERM if the plugin isn't loaded) and **waits for `koreader.sh` to
-  finish before relaunching** (can take >3 min; if it gives up, check `ps` and relaunch by hand). Never kill KOReader and relaunch immediately: two instances fight over the stock UI, and
-  you get a "startup script updated" dialog and a stuck Home screen (needed a reboot once).
+- Plugin commands go through `/tmp/deskdash_cmd` (polled every second) because KOReader EVIOCGRABs the touchscreen (injected touches can't reach it).
+- `deploy_dash.sh` sends `restart` (exit code 85: `koreader.sh` relaunches only KOReader, a few seconds). If the plugin
+  isn't running it falls back to SIGTERM and **waits for `koreader.sh` to finish** (that path restores the stock UI and
+  can take >3 min) before launching. Never kill KOReader and relaunch immediately: two instances fight over the stock
+  UI, and you get a "startup script updated" dialog and a stuck Home screen (needed a reboot once).
 - Launch KOReader: `setsid /var/local/kmc/bin/kpm launch koreader --asap`. Logs: `/mnt/us/koreader/crash.log`.
 
 ## The dashboard: `deskdash.koplugin/`
@@ -57,14 +57,14 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 ### Battery mode (`sleepUntilNextMinute`)
 
 - When unplugged (`/sys/class/power_supply/bd71827_ac/online` = 0), on page 1 and ≥60 s after the last touch: after the
-  minute redraw (+2 s for the e-ink refresh) it runs `rtcwake -d /dev/rtc1 -m mem -s <secs to next minute>`.
+  minute redraw it paints, waits for the e-ink refresh to finish (`UIManager:waitForVSync()`), then runs `rtcwake -d /dev/rtc1 -m mem -s <secs to next minute>`.
   `/dev/rtc1` (snvs) is the wake-capable RTC; rtc0 isn't. Measured awake time ≈ 2–3 s per minute.
 - KOReader timers use a clock that stops during suspend, so the pending tick is unscheduled and called directly on wake.
 - Waking more than 2 s early = power button (or USB plug-in) → stays awake/interactive for 60 s. Touch can't wake it.
 - The frontlight comes back on at every resume, so it's turned off before sleeping and restored on an early
   (power-button) wake, on any minute tick that doesn't go back to sleep (e.g. charger plugged in), or when the dashboard closes.
 - Wi-Fi drops during suspend and reassociates ~2 s after resume; `waitForWifi()` polls `lipc-get-prop com.lab126.wifid cmState` (≤20 s) before fetching.
-- `/mnt/us/deskdash_battery.log`: battery % at each weather fetch. The `sleep` command forces one cycle even when plugged in.
+- The `sleep` command forces one cycle even when plugged in.
 - Bypasses the stock powerd (it keeps `preventScreenSaver 1`); powerd hasn't objected so far.
 
 ## Known quirks / decisions

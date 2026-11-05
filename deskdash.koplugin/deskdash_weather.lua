@@ -19,10 +19,9 @@ local function curl(url)
 end
 
 --- UTF-8 for a BMP code point (LuaJIT has no \u{} escapes).
-function Weather.U(cp)
+local function U(cp)
     return string.char(0xE0 + math.floor(cp / 4096), 0x80 + math.floor(cp / 64) % 64, 0x80 + cp % 64)
 end
-local U = Weather.U
 
 -- WMO weather code -> { text, day icon, night icon } (icons are Nerd Font "weather" glyphs)
 local SUN, MOON = U(0xE30D), U(0xE32B)
@@ -32,7 +31,7 @@ local DRIZZLE, RAIN, SHOWERS = U(0xE31B), U(0xE318), U(0xE319)
 local SLEET, SNOW, THUNDER = U(0xE316), U(0xE31A), U(0xE31D)
 Weather.ICON = {
     thermometer = U(0xE350), humidity = U(0xE373), wind = U(0xE34B),
-    uv = SUN, sunrise = U(0xE34C), sunset = U(0xE34D), rain = U(0xE371),
+    uv = SUN, sunrise = U(0xE34C), sunset = U(0xE34D),
 }
 
 local CODES = {
@@ -97,7 +96,6 @@ function Weather.fetch(lat, lon, units)
         logger.warn("deskdash: bad forecast", body and body:sub(1, 200))
         return nil, "bad response"
     end
-    t.fetched_at = os.time()
     return t
 end
 

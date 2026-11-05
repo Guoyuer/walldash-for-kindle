@@ -7,7 +7,7 @@
 | 目录 | 作用 |
 |---|---|
 | `deskdash.koplugin/` | KOReader 插件：4 页仪表盘（现在 / 逐小时 / 7 天 / 详情），数据来自 Open-Meteo + ip-api |
-| `kdev/` | Kindle 端调试：`sshd.sh`（用 Jobman 自带的 dropbear 起一个只允许密钥登录的 SSH，仅限局域网）、`authorized_keys`、`ktap`（模拟触摸） |
+| `kdev/` | Kindle 端调试：`sshd.sh`（用 Jobman 自带的 dropbear 起一个只允许密钥登录的 SSH，仅限局域网）、`authorized_keys` |
 | `tools/` | 电脑端：`kctl.py`（命令 / 截图 / 推送，走 SSH）、`deploy_dash.sh`（部署插件） |
 | `documents/` | Kindle 书库里的 scriptlet（SSH - Start） |
 
@@ -16,7 +16,7 @@
 - 开机后在 Kindle 书库里点 **KOReader**，仪表盘会自动打开。
 - 左右滑动翻页；长按关闭（回到 KOReader，闲置 5 分钟后自动回来）；点一下立即刷新天气。
 - 设置：KOReader 菜单 → 工具 → Desk dashboard（自动打开、24 小时制、电池模式、华氏度）。
-- **电池模式**（默认开）：不插电时，每分钟画完就睡到下一分钟（`rtcwake`，墨水屏断电保持画面）。睡眠中触屏无效，**按一下电源键**唤醒，可滑动 60 秒（前光只在这时打开）；离开首页或刚碰过屏幕时不睡。插着电时常亮。电量记录在 `/mnt/us/deskdash_battery.log`（每次更新天气记一行）。
+- **电池模式**（默认开）：不插电时，每分钟画完就睡到下一分钟（`rtcwake`，墨水屏断电保持画面）。睡眠中触屏无效，**按一下电源键**唤醒，可滑动 60 秒（前光只在这时打开）；离开首页或刚碰过屏幕时不睡。插着电时常亮。
 
 ## 开发 / 调试
 
