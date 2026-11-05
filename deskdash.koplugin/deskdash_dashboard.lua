@@ -23,7 +23,7 @@ local VerticalSpan = require("ui/widget/verticalspan")
 local logger = require("logger")
 local time = require("ui/time")
 local Weather = require("deskdash_weather")
-local parseISO = Weather.parseISO
+local parseWallTime = Weather.parseWallTime
 local Screen = Device.screen
 
 local BLACK = Blitbuffer.COLOR_BLACK
@@ -146,8 +146,14 @@ end
 
 function Dashboard:refreshWeather()
     local W, s = Weather, self.settings
+    local started_at = os.time()
+    self.next_fetch_at = started_at + 60  -- retry on the next eligible minute tick if this fetch fails
+    self.pw.fetches = self.pw.fetches + 1
     self:setWifi(true)
-    self:waitForWifi()
+    if not self:waitForWifi() then
+        self.pw.fails = self.pw.fails + 1
+        return
+    end
     if not (s.lat and s.lon) or not self.offset then
         local loc = W.locate()
         if loc then
@@ -166,10 +172,11 @@ function Dashboard:refreshWeather()
             self.obs = W.observation(s.lat, s.lon, self.nws) or self.obs
         end
     end
-    -- On failure, try again at the next minute instead of waiting a full WEATHER_EVERY.
-    self.fetched_at = ok and os.time() or (os.time() - WEATHER_EVERY + 60)
-    self.pw.fetches = self.pw.fetches + 1
-    if not ok then self.pw.fails = self.pw.fails + 1 end
+    if ok then
+        self.next_fetch_at = os.time() + WEATHER_EVERY
+    else
+        self.pw.fails = self.pw.fails + 1
+    end
 end
 
 -- Battery mode switches Wi-Fi off between weather fetches (it otherwise reassociates at every minute wake).
@@ -191,7 +198,7 @@ end
 
 -- Wi-Fi needs ~2 s to reassociate after a suspend, ~10 s after being switched on; wait for it (up to 30 s).
 function Dashboard:waitForWifi()
-    if not Device:isKindle() then return end
+    if not Device:isKindle() then return true end
     local t0 = os.time()
     local t_mono = time.now()
     while os.time() - t0 < 30 do
@@ -200,12 +207,13 @@ function Dashboard:waitForWifi()
         if state == "CONNECTED" then
             if os.time() > t0 then logger.info("deskdash: wifi up after", os.time() - t0, "s") end
             self.pw.wifi = self.pw.wifi + time.to_number(time.since(t_mono))
-            return
+            return true
         end
         os.execute("sleep 1")
     end
     self.pw.wifi = self.pw.wifi + time.to_number(time.since(t_mono))
     logger.warn("deskdash: wifi not connected after 30 s")
+    return false
 end
 
 local function readFile(path)
@@ -241,7 +249,7 @@ function Dashboard:logPower(event)
         if f:seek("end") == 0 then f:write(POWER_HEADER) end
         local num = function(name, div) local v = tonumber(readFile(BAT .. name) or ""); return v and v / div or "" end
         f:write(string.format("%s,%s,%s,%s,%s,%d,%s,%d,%.1f,%d,%d,%d,%d,%.1f\n",
-            os.date("!%Y-%m-%d %H:%M", self:now()), event, readFile(BAT .. "capacity") or "",
+            os.date("!%Y-%m-%d %H:%M", self:localNow()), event, readFile(BAT .. "capacity") or "",
             num("charge_now", 1000), num("voltage_now", 1000), self:onExternalPower() and 1 or 0, readFile(BAT .. "temp") or "",
             os.time() - pw.t, time.to_number(time.since(pw.mono)), pw.wakes, pw.early, pw.fetches, pw.fails, pw.wifi))
         f:close()
@@ -255,12 +263,13 @@ function Dashboard:powerTick()
     if ac ~= self.pw.ac then
         self.pw.ac = ac
         self:logPower(ac and "plug" or "unplug")
-    elseif os.date("!%M", self:now()) == "00" then
+    elseif os.date("!%M", self:localNow()) == "00" then
         self:logPower("hour")
     end
 end
 
-function Dashboard:now()
+-- Match the forecast's local clock fields. Use os.time() for elapsed time and UTC timestamps.
+function Dashboard:localNow()
     local off = (self.data and self.data.utc_offset_seconds) or self.offset or 0
     return os.time() + off   -- "local" epoch; always format with "!"
 end
@@ -287,11 +296,11 @@ end
 function Dashboard:header(title)
     local s = self.settings
     return VerticalGroup:new{ align = "center",
-        vspan(70),
+        vspan(38),
         txt(title, BOLD, 46, BLACK),
         vspan(8),
-        txt((s.city or "") .. "  ·  " .. self:hhmm(self:now()), SANS, 34, GRAY, self.W - 80),
-        vspan(40),
+        txt((s.city or "") .. "  ·  " .. self:hhmm(self:localNow()), SANS, 34, GRAY, self.W - 80),
+        vspan(30),
     }
 end
 
@@ -308,7 +317,7 @@ function Dashboard:currentConditions()
 end
 
 function Dashboard:pageNow()
-    local t, d = self:now(), self.data
+    local t, d = self:localNow(), self.data
     local date = os.date("!%A, %b ", t) .. tonumber(os.date("!%d", t))
     local function fmt(at) return self:hhmm(at) end
     local alert = Weather.activeAlert(self.alerts, t, fmt)
@@ -318,18 +327,22 @@ function Dashboard:pageNow()
     -- Big type: NotoSans digits are tabular, so "00:00" is as wide as "14:55" (~995 px of 1072 at 400 px).
     local g = VerticalGroup:new{ align = "center",
         txt(self:hhmm(t), HEAVY, 400 - 30 * extra),   -- each notice line takes room from the clock and weather row
-        txt(date, BOLD, 74),
-        vspan(60 - 25 * extra),
+        vspan(-36),   -- reclaim the large clock font's blank space below the digits
+        txt(date, BOLD, 82),
+        vspan(42 - 16 * extra),
     }
     if d then
-        local c, today = d.current, d.daily
+        local c, daily = d.current, d.daily
+        local day_index, is_today = Weather.firstForecastDay(daily, t)
         local cond, icon = self:currentConditions()
         table.insert(g, HorizontalGroup:new{ align = "center",
-            txt(icon, ICONS, 230 - 20 * extra), hspan(90), txt(deg(c.temperature_2m), HEAVY, 260 - 20 * extra) })
-        table.insert(g, vspan(24 - 8 * extra))
-        table.insert(g, txt(cond, BOLD, 78, BLACK, self.W - 80))
+            txt(icon, ICONS, 246 - 20 * extra), hspan(60), txt(deg(c.temperature_2m), HEAVY, 288 - 20 * extra) })
+        table.insert(g, vspan(6 - 3 * extra))
+        table.insert(g, txt(cond, BOLD, 84, BLACK, self.W - 80))
         table.insert(g, vspan(8))
-        table.insert(g, txt("H " .. deg(today.temperature_2m_max[1]) .. "    L " .. deg(today.temperature_2m_min[1]), BOLD, 72))
+        local hi = is_today and daily.temperature_2m_max[day_index]
+        local lo = is_today and daily.temperature_2m_min[day_index]
+        table.insert(g, txt("H " .. deg(hi) .. "    L " .. deg(lo), BOLD, 80))
     else
         table.insert(g, txt("Weather unavailable", BOLD, 56, GRAY))
         table.insert(g, txt("Check Wi-Fi · tap to retry", SANS, 40, GRAY))
@@ -351,24 +364,27 @@ function Dashboard:pageHourly()
     local g = self:header("HOURLY FORECAST")
     local h = self.data and self.data.hourly
     if not h then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
-    local now = self:now()
+    local now = self:localNow()
     local first = Weather.firstForecastHour(h, now)
     local last = math.min(first + 11, #h.time - 1)
     if first > last then table.insert(g, txt("Forecast unavailable", SANS, 48, GRAY)); return g end
-    local rowW, rowH = self.W - 88, 88
+    local rowW, rowH = self.W - 88, 92
     for i = first, last do
-        local t = parseISO(h.time[i])
+        local t = parseWallTime(h.time[i])
         local is_now = i == first and t <= now
         local _, icon = Weather.describe(h.weather_code[i], h.is_day and h.is_day[i] == 1)
-        if is_now then _, icon = self:currentConditions() end
+        local temperature = h.temperature_2m[i]
+        if is_now then
+            _, icon = self:currentConditions()
+            temperature = self.data.current.temperature_2m
+        end
         local p = Weather.hourlyPrecipChance(h, i)
         local label = is_now and "Now" or self:hhmm(t)
-        local temperature = is_now and self.data.current.temperature_2m or h.temperature_2m[i]
         table.insert(g, HorizontalGroup:new{ align = "center",
-            box(260, rowH, txt(label, is_now and BOLD or SANS, 50), "left"),
-            box(170, rowH, txt(icon, ICONS, 64)),
-            box(200, rowH, txt(p .. "%", SANS, 40, GRAY), "right"),
-            box(rowW - 630, rowH, txt(deg(temperature), BOLD, 54), "right"),
+            box(260, rowH, txt(label, is_now and BOLD or SANS, 54), "left"),
+            box(170, rowH, txt(icon, ICONS, 68)),
+            box(200, rowH, txt(p .. "%", SANS, 46, GRAY), "right"),
+            box(rowW - 630, rowH, txt(deg(temperature), BOLD, 58), "right"),
         })
         if i < last then table.insert(g, LineWidget:new{ dimen = Geom:new{ w = rowW, h = 2 }, background = LIGHT }) end
     end
@@ -397,27 +413,31 @@ function Dashboard:pageDaily()
     local g = self:header("7-DAY FORECAST")
     local d = self.data and self.data.daily
     if not d then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
-    local n = math.min(7, #d.time)
+    local first, is_today = Weather.firstForecastDay(d, self:localNow())
+    if not first then table.insert(g, txt("Forecast unavailable", SANS, 48, GRAY)); return g end
+    local last = math.min(first + 6, #d.time)
     local min_all, max_all = math.huge, -math.huge
-    for i = 1, n do
+    for i = first, last do
         min_all = math.min(min_all, d.temperature_2m_min[i]); max_all = math.max(max_all, d.temperature_2m_max[i])
     end
-    local rowW, rowH = self.W - 120, 150
-    for i = 1, n do
+    local rowW, rowH = self.W - 120, 157
+    local barWidth = rowW - 170 - 110 - 120 - 28 - 28 - 120
+    for i = first, last do
         local _, icon = Weather.describe(d.weather_code[i], true)
-        local day = (i == 1) and "Today" or os.date("!%a", parseISO(d.time[i]))
+        local today = i == first and is_today
+        local day = today and "Today" or os.date("!%a", parseWallTime(d.time[i]))
         table.insert(g, HorizontalGroup:new{ align = "center",
-            box(170, rowH, txt(day, i == 1 and BOLD or SANS, 50), "left"),
-            box(110, rowH, txt(icon, ICONS, 60)),
-            box(120, rowH, txt(deg(d.temperature_2m_min[i]), SANS, 48, GRAY), "right"),
+            box(170, rowH, txt(day, today and BOLD or SANS, 54), "left"),
+            box(110, rowH, txt(icon, ICONS, 66)),
+            box(120, rowH, txt(deg(d.temperature_2m_min[i]), SANS, 52, GRAY), "right"),
             hspan(28),
-            box(rowW - 170 - 110 - 120 - 28 - 28 - 120, rowH,
-                self:rangeBar(rowW - 170 - 110 - 120 - 28 - 28 - 120, d.temperature_2m_min[i], d.temperature_2m_max[i],
-                    min_all, max_all, i == 1 and self.data.current.temperature_2m or nil)),
+            box(barWidth, rowH,
+                self:rangeBar(barWidth, d.temperature_2m_min[i], d.temperature_2m_max[i],
+                    min_all, max_all, today and self.data.current.temperature_2m)),
             hspan(28),
-            box(120, rowH, txt(deg(d.temperature_2m_max[i]), BOLD, 48), "left"),
+            box(120, rowH, txt(deg(d.temperature_2m_max[i]), BOLD, 52), "left"),
         })
-        if i < n then table.insert(g, LineWidget:new{ dimen = Geom:new{ w = rowW, h = 2 }, background = LIGHT }) end
+        if i < last then table.insert(g, LineWidget:new{ dimen = Geom:new{ w = rowW, h = 2 }, background = LIGHT }) end
     end
     return g
 end
@@ -430,8 +450,8 @@ function Dashboard:tile(icon, label, value, sub, w, h)
         fixed(w - 2 * border - pl, h - 2 * border - pt, VerticalGroup:new{ align = "left",
             HorizontalGroup:new{ align = "center", box(54, 44, txt(icon, ICONS, 40, GRAY), "left"), txt(label, BOLD, 32, GRAY) },
             vspan(2),
-            txt(value, HEAVY, 72),
-            txt(sub or " ", SANS, 34, GRAY, w - 60),
+            txt(value, HEAVY, 82),
+            txt(sub or " ", SANS, 36, GRAY, w - 60),
         }),
     }
 end
@@ -441,39 +461,47 @@ function Dashboard:pageDetails()
     local d = self.data
     if not d then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
     local W, c, day, I = Weather, d.current, d.daily, Weather.ICON
-    local units = (d.current_units and d.current_units.wind_speed_10m) or "km/h"
-    local punits = (d.daily_units and d.daily_units.precipitation_sum) or "mm"
-    local tw, th, gap = math.floor((self.W - 80 - 22) / 2), 252, 22
-    local now = self:now()
-    local diff = c.apparent_temperature - c.temperature_2m
+    local units = (type(d.current_units) == "table" and d.current_units.wind_speed_10m) or "km/h"
+    local punits = d.daily_units.precipitation_sum or "mm"
+    local tw, th, gap = math.floor((self.W - 80 - 22) / 2), 263, 22
+    local now = self:localNow()
+    local today, is_today = W.firstForecastDay(day, now)
+    if not is_today then today = nil end
+    local tomorrow, is_tomorrow = W.firstForecastDay(day, now + 86400)
+    if not is_tomorrow then tomorrow = nil end
+    local diff = c.apparent_temperature and c.temperature_2m and (c.apparent_temperature - c.temperature_2m)
     local function amount(v)
         if not v then return "--" end
         return (punits == "inch" and string.format("%.2f", v) or string.format("%g", math.floor(v * 10 + 0.5) / 10)) .. " " .. punits
     end
     -- Sun: show the next event big and the other one small (like iOS).
-    local rise1, set1 = parseISO(day.sunrise[1]), parseISO(day.sunset[1])
-    local sun_label, sun_icon, sun_value, sun_sub
-    if now < rise1 or now >= set1 then
-        local rise = (now >= set1 and day.sunrise[2]) and parseISO(day.sunrise[2]) or rise1
-        sun_label, sun_icon, sun_value, sun_sub = "SUNRISE", I.sunrise, self:hhmm(rise), "Sunset " .. self:hhmm(set1)
-    else
-        sun_label, sun_icon, sun_value, sun_sub = "SUNSET", I.sunset, self:hhmm(set1), "Sunrise " .. self:hhmm(rise1)
+    local rise, set = day.sunrise[today], day.sunset[today]
+    local sun_label, sun_icon, sun_value, sun_sub = "SUN", I.sunrise, "--", "Unavailable"
+    if rise and now < rise then
+        sun_label, sun_value = "SUNRISE", self:hhmm(rise)
+        sun_sub = set and ("Sunset " .. self:hhmm(set))
+    elseif set and now < set then
+        sun_label, sun_icon, sun_value = "SUNSET", I.sunset, self:hhmm(set)
+        sun_sub = rise and ("Sunrise " .. self:hhmm(rise))
+    elseif day.sunrise[tomorrow] then
+        sun_label, sun_value = "SUNRISE", self:hhmm(day.sunrise[tomorrow])
+        sun_sub = set and ("Sunset " .. self:hhmm(set))
     end
     local moon_name, moon_lit, moon_icon = W.moon(os.time())
     local aq = self.aq
-    local uv = day.uv_index_max and day.uv_index_max[1]
+    local uv = day.uv_index_max[today]
     local tiles = {
         self:tile(I.thermometer, "FEELS LIKE", deg(c.apparent_temperature),
-            math.abs(diff) >= 2 and (diff < 0 and "Colder than actual" or "Warmer than actual"), tw, th),
-        self:tile(I.humidity, "HUMIDITY", math.floor(c.relative_humidity_2m + 0.5) .. "%",
+            diff and math.abs(diff) >= 2 and (diff < 0 and "Colder than actual" or "Warmer than actual"), tw, th),
+        self:tile(I.humidity, "HUMIDITY", c.relative_humidity_2m and (math.floor(c.relative_humidity_2m + 0.5) .. "%") or "--",
             c.dew_point_2m and ("Dew point " .. deg(c.dew_point_2m)), tw, th),
-        self:tile(I.wind, "WIND", tostring(math.floor(c.wind_speed_10m + 0.5)),
-            units .. " " .. W.compass(c.wind_direction_10m)
-            .. (c.wind_gusts_10m and (" · Gusts " .. math.floor(c.wind_gusts_10m + 0.5)) or ""), tw, th),
+        self:tile(I.wind, "WIND", c.wind_speed_10m and tostring(math.floor(c.wind_speed_10m + 0.5)) or "--",
+            c.wind_speed_10m and (units .. " " .. W.compass(c.wind_direction_10m)
+            .. (c.wind_gusts_10m and (" · Gusts " .. math.floor(c.wind_gusts_10m + 0.5)) or "")), tw, th),
         self:tile(I.uv, "UV MAX TODAY", type(uv) == "number" and tostring(math.floor(uv + 0.5)) or "--",
             type(uv) == "number" and W.uvLevel(uv) or "Unavailable", tw, th),
-        self:tile(I.umbrella, "PRECIP FORECAST", amount(day.precipitation_sum and day.precipitation_sum[1]),
-            "Tomorrow " .. amount(day.precipitation_sum and day.precipitation_sum[2]), tw, th),
+        self:tile(I.umbrella, "PRECIP FORECAST", amount(day.precipitation_sum[today]),
+            "Tomorrow " .. amount(day.precipitation_sum[tomorrow]), tw, th),
         self:tile(I.smog, "AQI ESTIMATE", aq and tostring(math.floor(aq + 0.5)) or "--",
             aq and W.aqiLevel(aq) or "Unavailable", tw, th),
         self:tile(sun_icon, sun_label, sun_value, sun_sub, tw, th),
@@ -530,8 +558,8 @@ end
 function Dashboard:onTick()
     self:powerTick()
     if self.page ~= 1 and os.time() - self.last_touch >= IDLE_RETURN then self.page = 1 end
-    local now = self:now()
-    if not Weather.isNight(now, NIGHT) and os.time() - (self.fetched_at or 0) >= WEATHER_EVERY then self:refreshWeather() end
+    local now = self:localNow()
+    if not Weather.isNight(now, NIGHT) and os.time() >= self.next_fetch_at then self:refreshWeather() end
     self:redraw(tonumber(os.date("!%M", now)) % FLASH_EVERY == 0 and "full" or "ui")
     self:scheduleTick()
     if self:canSleep() then
@@ -551,7 +579,7 @@ end
 function Dashboard:sleepUntilNextMinute()
     if not self:canSleep() then return end
     self.force_sleep = nil
-    local secs = Weather.secondsToNextWake(self:now(), NIGHT)   -- next minute, or next 10 minutes at night
+    local secs = Weather.secondsToNextWake(self:localNow(), NIGHT)   -- next minute, or next 10 minutes at night
     if secs < 5 then return end   -- too close to the minute; the regular tick handles it
     local target = os.time() + secs
     UIManager:unschedule(self._tick)

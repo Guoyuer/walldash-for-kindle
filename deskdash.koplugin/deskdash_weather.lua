@@ -82,12 +82,17 @@ function Weather.locate()
     logger.warn("deskdash: locate failed", body)
 end
 
+local CURRENT = { "temperature_2m", "apparent_temperature", "relative_humidity_2m", "dew_point_2m",
+    "weather_code", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m", "is_day" }
 local HOURLY = { "temperature_2m", "weather_code", "precipitation_probability", "is_day" }
 local DAILY = { "weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_sum" }
 local DEFAULT_MODEL, NBM = "_best_match", "_ncep_nbm_conus"
 
 local function forecastSection(section, fields, suffix)
     if type(section) ~= "table" or type(section.time) ~= "table" or #section.time == 0 then return nil end
+    for i = 1, #section.time do
+        if not Weather.parseWallTime(section.time[i]) then return nil end
+    end
     local selected = { time = section.time }
     for _, field in ipairs(fields) do
         local series = section[field .. suffix]
@@ -98,6 +103,14 @@ local function forecastSection(section, fields, suffix)
         selected[field] = series
     end
     return selected
+end
+
+local function sunTimes(series, count)
+    local times = {}
+    if type(series) == "table" then
+        for i = 1, count do times[i] = Weather.parseWallTime(series[i]) end
+    end
+    return times
 end
 
 -- All forecast pages use the same model. Outside NBM coverage the API can return unsuffixed default fields.
@@ -111,12 +124,20 @@ function Weather.selectForecast(t)
     end
     if not (hourly and daily) then return nil, "incomplete forecast" end
 
-    daily.sunrise = t.daily["sunrise" .. suffix]
-    daily.sunset = t.daily["sunset" .. suffix]
-    daily.uv_index_max = t.daily["uv_index_max" .. suffix]
-    local units = t.daily_units or {}
+    daily.sunrise = sunTimes(t.daily["sunrise" .. suffix], #daily.time)
+    daily.sunset = sunTimes(t.daily["sunset" .. suffix], #daily.time)
+    local uv = t.daily["uv_index_max" .. suffix]
+    daily.uv_index_max = type(uv) == "table" and uv or {}
+    local units = type(t.daily_units) == "table" and t.daily_units or {}
     t.daily_units = { precipitation_sum = units["precipitation_sum" .. suffix] }
     t.hourly, t.daily = hourly, daily
+    local source = type(t.current) == "table" and t.current or {}
+    local current = {}
+    for _, field in ipairs(CURRENT) do
+        local value = source[field]
+        if type(value) == "number" then current[field] = value end
+    end
+    t.current = current
     return t
 end
 
@@ -124,8 +145,7 @@ end
 function Weather.fetch(lat, lon, units)
     local url = string.format(
         "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
-        .. "&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,weather_code,"
-        .. "wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day"
+        .. "&current=" .. table.concat(CURRENT, ",")
         .. "&hourly=" .. table.concat(HOURLY, ",")
         .. "&daily=" .. table.concat(DAILY, ",") .. ",sunrise,sunset,uv_index_max"
         .. "&models=best_match,ncep_nbm_conus"
@@ -198,10 +218,14 @@ function Weather.observation(lat, lon, cache)
     end
     local o = nws("/stations/" .. cache.station .. "/observations/latest")
     local p = o and o.properties
-    if not (p and p.textDescription and p.textDescription ~= "" and p.timestamp) then return nil end
-    -- timestamp is UTC ("2026-11-05T19:51:00+00:00"), so parseISO gives the real epoch
+    if not (p and type(p.textDescription) == "string" and p.textDescription ~= "" and type(p.timestamp) == "string") then
+        return nil
+    end
+    -- The station timestamp is already in UTC, so parsing its clock fields gives a UTC epoch.
+    local observed_at = Weather.parseWallTime(p.timestamp:sub(1, 16))
+    if not observed_at then return nil end
     return { text = p.textDescription, code = Weather.obsCode(p.textDescription),
-             t = Weather.parseISO(p.timestamp:sub(1, 16)), station = cache.station }
+             t = observed_at, station = cache.station }
 end
 
 --- Active US National Weather Service alerts for a point: list of { event, ends = "2026-11-05T18:00:00-05:00" }
@@ -221,10 +245,13 @@ function Weather.alerts(lat, lon)
     return list
 end
 
---- "2026-11-05T13:00" or "2026-11-05" -> "local" epoch (as if UTC; format with os.date("!...")).
---- Pure arithmetic (days-from-civil), so it doesn't depend on the system time zone or DST.
-function Weather.parseISO(s)
-    local y, m, d, H, M = s:match("(%d+)-(%d+)-(%d+)T?(%d*):?(%d*)")
+--- Encode YYYY-MM-DDTHH:MM (or a date at noon) as if the clock fields were UTC.
+--- Format with os.date("!..."). Callers must handle any time-zone offset before parsing.
+function Weather.parseWallTime(s)
+    if type(s) ~= "string" then return nil end
+    local y, m, d, H, M = s:match("^(%d%d%d%d)-(%d%d)-(%d%d)T(%d%d):(%d%d)$")
+    if not y then y, m, d = s:match("^(%d%d%d%d)-(%d%d)-(%d%d)$") end
+    if not y then return nil end
     y, m, d = tonumber(y), tonumber(m), tonumber(d)
     if m <= 2 then y = y - 1 end
     local era = math.floor(y / 400)
@@ -233,7 +260,7 @@ function Weather.parseISO(s)
     local days = era * 146097 + yoe * 365 + math.floor(yoe / 4) - math.floor(yoe / 100) + doy - 719468
     return days * 86400 + (tonumber(H) or 12) * 3600 + (tonumber(M) or 0) * 60
 end
-local parseISO = Weather.parseISO
+local parseWallTime = Weather.parseWallTime
 
 -- Open-Meteo timestamps the probability at the end of the interval; the hourly row is labelled by its start.
 function Weather.hourlyPrecipChance(h, i)
@@ -243,20 +270,28 @@ end
 
 function Weather.firstForecastHour(h, now)
     for i = 1, #h.time - 1 do
-        if parseISO(h.time[i + 1]) > now then return i end
+        if parseWallTime(h.time[i + 1]) > now then return i end
     end
     return #h.time
+end
+
+--- Index of the first forecast date on or after today, plus whether it matches today.
+function Weather.firstForecastDay(daily, local_now)
+    local today = os.date("!%Y-%m-%d", local_now)
+    for i, date in ipairs(daily.time) do
+        if date >= today then return i, date == today end
+    end
 end
 
 --- Summarize the first high-probability interval starting within the next three hours.
 function Weather.precipSummary(h, now, fmt)
     if not h then return nil end
     for i = Weather.firstForecastHour(h, now), #h.time - 1 do
-        local starts = parseISO(h.time[i])
+        local starts = parseWallTime(h.time[i])
         if starts >= now + 3 * 3600 then break end
         local p = Weather.hourlyPrecipChance(h, i)
         if p >= 60 then
-            return string.format("%s–%s · %d%% precip", fmt(starts), fmt(parseISO(h.time[i + 1])), p)
+            return string.format("%s–%s · %d%% precip", fmt(starts), fmt(parseWallTime(h.time[i + 1])), p)
         end
     end
 end
@@ -264,7 +299,7 @@ end
 --- Most severe alert that hasn't ended at "local" epoch now, e.g. "Wind Advisory until 18:00", or nil.
 function Weather.activeAlert(alerts, now, fmt)
     for _, a in ipairs(alerts or {}) do
-        local ends = a.ends and parseISO(a.ends:sub(1, 16))
+        local ends = type(a.ends) == "string" and parseWallTime(a.ends:sub(1, 16))
         if not ends then return a.event end
         if ends > now then return a.event .. " until " .. fmt(ends) end
     end
