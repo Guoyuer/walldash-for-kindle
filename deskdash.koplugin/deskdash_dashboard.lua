@@ -143,12 +143,31 @@ function Dashboard:refreshWeather()
             self.offset = loc.offset
         end
     end
+    self:waitForWifi()
+    local ok = false
     if s.lat and s.lon then
         local data, err = W.fetch(s.lat, s.lon, s.units)
-        if data then self.data = data else logger.warn("deskdash: fetch failed", err) end
+        if data then self.data = data; ok = true else logger.warn("deskdash: fetch failed", err) end
     end
-    self.fetched_at = os.time()
+    -- On failure, try again at the next minute instead of waiting a full WEATHER_EVERY.
+    self.fetched_at = ok and os.time() or (os.time() - WEATHER_EVERY + 60)
     self:logBattery()
+end
+
+-- After a suspend the Wi-Fi needs a few seconds to reassociate; wait for it (up to 20 s).
+function Dashboard:waitForWifi()
+    if not Device:isKindle() then return end
+    local t0 = os.time()
+    while os.time() - t0 < 20 do
+        local p = io.popen("lipc-get-prop com.lab126.wifid cmState 2>/dev/null")
+        local state = p and p:read("*l"); if p then p:close() end
+        if state == "CONNECTED" then
+            if os.time() > t0 then logger.info("deskdash: wifi up after", os.time() - t0, "s") end
+            return
+        end
+        os.execute("sleep 1")
+    end
+    logger.warn("deskdash: wifi not connected after 20 s")
 end
 
 local function readFile(path)
@@ -403,15 +422,30 @@ function Dashboard:sleepUntilNextMinute()
     if secs < 5 then return end   -- too close to the minute; the regular tick handles it
     local target = os.time() + secs
     UIManager:unschedule(self._tick)
+    -- The frontlight comes back on at every resume, so switch it off while in battery mode;
+    -- it's turned back on only for a power-button wake.
+    local powerd = Device:hasFrontlight() and Device.powerd
+    if powerd and powerd:isFrontlightOn() then
+        powerd:turnOffFrontlight()
+        self.light_off = true
+    end
     os.execute(string.format("sync; rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
     local early = target - os.time()
     if early > 2 then
         -- woken before the alarm: power button (or suspend refused) -> stay interactive for a while
         logger.info("deskdash: woke", early, "s early")
+        self:restoreLight()
         self.last_touch = os.time()
         self:scheduleTick()
     else
         UIManager:nextTick(self._tick)
+    end
+end
+
+function Dashboard:restoreLight()
+    if self.light_off then
+        self.light_off = nil
+        Device.powerd:turnOnFrontlight()
     end
 end
 
@@ -441,6 +475,7 @@ function Dashboard:onClose()
     UIManager:unschedule(self._tick)
     UIManager:unschedule(self._poll)
     UIManager:unschedule(self._sleep)
+    self:restoreLight()
     self:keepAwake(false)
     UIManager:close(self, "full")
     return true
