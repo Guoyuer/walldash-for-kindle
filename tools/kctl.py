@@ -2,9 +2,7 @@
 
   python tools/kctl.py run "uname -a"
   python tools/kctl.py shot [out.png]
-  python tools/kctl.py tap X Y [hold_ms]   (screen pixel coordinates, portrait; stock UI only)
-  python tools/kctl.py swipe X1 Y1 X2 Y2 [steps]
-  python tools/kctl.py dash <next|prev|refresh|close|quit|page N> [out.png]
+  python tools/kctl.py dash <next|prev|refresh|close|quit|restart|sleep|page N> [out.png]
   python tools/kctl.py push file ...        (repo-relative files -> same path under /mnt/us)
 """
 import os, subprocess, sys
@@ -65,10 +63,6 @@ def main():
         sys.exit(run(" ".join(a[1:])))
     elif a[0] == "shot":
         shot(a[1] if len(a) > 1 else os.path.join(inbox, "shot.png"))
-    elif a[0] == "tap":
-        sys.exit(run("sh /mnt/us/kdev/ktap " + " ".join(a[1:])))
-    elif a[0] == "swipe":
-        sys.exit(run("sh /mnt/us/kdev/ktap swipe " + " ".join(a[1:])))
     elif a[0] == "dash":
         # send a command to the KOReader dashboard plugin, wait for the redraw, screenshot
         out = a[-1] if a[-1].endswith(".png") else os.path.join(inbox, "dash.png")

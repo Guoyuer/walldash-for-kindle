@@ -30,7 +30,7 @@ local GRAY = Blitbuffer.Color8(0x33)   -- secondary text
 local LIGHT = Blitbuffer.Color8(0x99)  -- separators, range-bar track
 
 local SANS, BOLD, ICONS = "NotoSans-Regular.ttf", "NotoSans-Bold.ttf", "nerdfonts/symbols.ttf"
-local HEAVY -- resolved lazily: Kindle's Amazon Ember Heavy if KOReader can see it, else Noto Bold
+local HEAVY = BOLD   -- big numerals (KOReader can't see the Kindle's Amazon Ember)
 
 local PAGES = 4
 local IDLE_RETURN = 120          -- seconds on another page before returning to "Now"
@@ -38,9 +38,7 @@ local WEATHER_EVERY = 15 * 60    -- seconds between forecast fetches
 local FLASH_EVERY = 30           -- minutes between flashing full refreshes
 -- Battery mode: on battery, suspend to RAM between minute updates (e-ink keeps the picture).
 local AWAKE_AFTER_INPUT = 60     -- stay awake this long after a touch / power-button wake
-local SETTLE = 2                 -- seconds for the e-ink refresh to finish before sleeping
 local RTC = "/dev/rtc1"          -- the wake-capable RTC on the PW4 (snvs)
-local BATTERY_LOG = "/mnt/us/deskdash_battery.log"
 
 -- Font:getFace() scales sizes by DPI; we think in screen pixels.
 local SCALE = Screen:scaleBySize(1000) / 1000
@@ -86,7 +84,6 @@ function Dashboard:init()
         -- Closing needs a deliberate long-press, so a stray swipe on the wall can't exit.
         Hold = { GestureRange:new{ ges = "hold", range = self.dimen } },
     }
-    HEAVY = HEAVY or BOLD
     self.page = 1
     self.minutes = 0
     self.last_touch = os.time()
@@ -100,8 +97,8 @@ function Dashboard:init()
     UIManager:scheduleIn(1, self._poll)
 end
 
--- Debug/remote control: write one of next|prev|refresh|close|quit|sleep|page N to this file.
--- ("sleep" forces one battery-mode sleep even when plugged in.)
+-- Debug/remote control: write one of next|prev|refresh|close|quit|restart|sleep|page N to this file.
+-- ("sleep" forces one battery-mode sleep even when plugged in; "restart" reloads KOReader + plugin quickly.)
 -- (KOReader grabs the touchscreen, so injected touches can't reach it.)
 local CMD_FILE = "/tmp/deskdash_cmd"
 function Dashboard:pollCommand()
@@ -111,15 +108,16 @@ function Dashboard:pollCommand()
         f:close()
         os.remove(CMD_FILE)
         logger.info("deskdash: command", cmd)
-        if cmd == "sleep" then self.last_touch = 0; self.force_sleep = true; UIManager:scheduleIn(SETTLE, self._sleep)
+        if cmd == "sleep" then self.last_touch = 0; self.force_sleep = true; UIManager:nextTick(self._sleep)
         elseif cmd == "next" then self:onSwipe(nil, { direction = "west" })
         elseif cmd == "prev" then self:onSwipe(nil, { direction = "east" })
         elseif cmd == "refresh" then self:onTap()
         elseif cmd == "close" then self:onClose(); return
-        elseif cmd == "quit" then
-            -- Clean KOReader exit (same as menu > Exit), so koreader.sh restores the Kindle UI properly.
+        elseif cmd == "quit" or cmd == "restart" then
+            -- quit: clean exit (menu > Exit), koreader.sh restores the Kindle UI (slow).
+            -- restart: exit code 85, koreader.sh just relaunches KOReader (fast; used by deploy).
             self:onClose()
-            UIManager:quit()
+            if cmd == "quit" then UIManager:quit() else UIManager:restartKOReader() end
             return
         elseif cmd:match("^page %d$") then self.page = tonumber(cmd:sub(6)); self:redraw("partial") end
     end
@@ -151,7 +149,6 @@ function Dashboard:refreshWeather()
     end
     -- On failure, try again at the next minute instead of waiting a full WEATHER_EVERY.
     self.fetched_at = ok and os.time() or (os.time() - WEATHER_EVERY + 60)
-    self:logBattery()
 end
 
 -- After a suspend the Wi-Fi needs a few seconds to reassociate; wait for it (up to 20 s).
@@ -179,14 +176,6 @@ end
 
 function Dashboard:onExternalPower()
     return readFile("/sys/class/power_supply/bd71827_ac/online") == "1"
-end
-
-function Dashboard:logBattery()
-    local f = io.open(BATTERY_LOG, "a")
-    if not f then return end
-    f:write(string.format("%s battery=%s%% ac=%s\n", os.date("%Y-%m-%d %H:%M"),
-        readFile("/sys/class/power_supply/bd71827_bat/capacity") or "?", self:onExternalPower() and 1 or 0))
-    f:close()
 end
 
 function Dashboard:now()
@@ -406,7 +395,7 @@ function Dashboard:onTick()
     self:redraw(self.minutes % FLASH_EVERY == 0 and "full" or "ui")
     self:scheduleTick()
     if self:canSleep() then
-        UIManager:scheduleIn(SETTLE, self._sleep)
+        UIManager:nextTick(self._sleep)
     else
         self:restoreLight()   -- staying awake (e.g. charger plugged in): undo the battery-mode light-off
     end
@@ -426,6 +415,9 @@ function Dashboard:sleepUntilNextMinute()
     if secs < 5 then return end   -- too close to the minute; the regular tick handles it
     local target = os.time() + secs
     UIManager:unschedule(self._tick)
+    -- Paint now and let the e-ink refresh finish (an interrupted refresh leaves ghosting).
+    UIManager:forceRePaint()
+    UIManager:waitForVSync()
     -- The frontlight comes back on at every resume, so switch it off while in battery mode;
     -- it's turned back on only for a power-button wake.
     local powerd = Device:hasFrontlight() and Device.powerd
