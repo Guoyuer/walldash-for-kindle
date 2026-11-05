@@ -15,8 +15,9 @@ if pgrep -f "[l]uajit ./reader.lua" >/dev/null; then
   echo quit > /tmp/deskdash_cmd
   i=0; while pgrep -f "[k]oreader.sh" >/dev/null && [ $i -lt 30 ]; do sleep 1; i=$((i+1)); done
   # Plugin not loaded / dashboard closed: SIGTERM is a normal (non-restart) exit for koreader.sh too.
-  if pgrep -f "[k]oreader.sh" >/dev/null; then echo "no response to quit, sending SIGTERM"; kill -TERM $(pgrep -o -f "[l]uajit ./reader.lua"); fi
-  while pgrep -f "[k]oreader.sh" >/dev/null && [ $i -lt 90 ]; do sleep 1; i=$((i+1)); done
+  R=$(pgrep -o -f "[l]uajit ./reader.lua")
+  if [ -n "$R" ]; then echo "no response to quit, sending SIGTERM"; kill -TERM $R; fi
+  while pgrep -f "[k]oreader.sh" >/dev/null && [ $i -lt 180 ]; do sleep 1; i=$((i+1)); done
   if pgrep -f "[k]oreader.sh" >/dev/null; then echo "KOReader did not exit - quit it from its menu"; exit 1; fi
   echo "KOReader exited after ${i}s"; sleep 5
 fi
