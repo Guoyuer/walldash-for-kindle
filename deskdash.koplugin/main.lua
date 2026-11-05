@@ -75,11 +75,6 @@ function DeskDash:addToMainMenu(menu_items)
                 callback = function() G_reader_settings:saveSetting("deskdash_autostart", not setting("autostart", true)) end,
             },
             {
-                text = _("24-hour clock"),
-                checked_func = function() return setting("clock_24h", true) end,
-                callback = function() G_reader_settings:saveSetting("deskdash_clock_24h", not setting("clock_24h", true)) end,
-            },
-            {
                 text = _("Battery mode (sleep between minutes when unplugged)"),
                 checked_func = function() return setting("battery_mode", true) end,
                 callback = function() G_reader_settings:saveSetting("deskdash_battery_mode", not setting("battery_mode", true)) end,
@@ -101,6 +96,8 @@ function DeskDash:onShowDeskDash()
         settings = {
             units = setting("units", "metric"),
             clock_24h = setting("clock_24h", true),
+            language = setting("language", "en"),
+            landscape = setting("landscape", false),
             battery_mode = setting("battery_mode", true),
             lat = setting("lat", nil), lon = setting("lon", nil), city = setting("city", nil),
         },

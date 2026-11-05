@@ -23,6 +23,7 @@ local VerticalSpan = require("ui/widget/verticalspan")
 local logger = require("logger")
 local time = require("ui/time")
 local Weather = require("deskdash_weather")
+local Chinese = require("deskdash_chinese")
 local parseWallTime = Weather.parseWallTime
 local Screen = Device.screen
 
@@ -83,8 +84,9 @@ local Dashboard = InputContainer:extend{
     settings = nil,  -- { units=, clock_24h=, lat=, lon=, city= }
 }
 
-function Dashboard:init()
+function Dashboard:layoutScreen()
     self.W, self.H = Screen:getWidth(), Screen:getHeight()
+    self.landscape = self.W > self.H
     self.dimen = Geom:new{ x = 0, y = 0, w = self.W, h = self.H }
     self.ges_events = {
         Swipe = { GestureRange:new{ ges = "swipe", range = self.dimen } },
@@ -92,6 +94,17 @@ function Dashboard:init()
         -- Closing needs a deliberate long-press, so a stray swipe on the wall can't exit.
         Hold = { GestureRange:new{ ges = "hold", range = self.dimen } },
     }
+end
+
+function Dashboard:applyOrientation()
+    local mode = self.settings.landscape and Screen.DEVICE_ROTATED_CLOCKWISE or Screen.DEVICE_ROTATED_UPRIGHT
+    if Screen:getRotationMode() ~= mode then Screen:setRotationMode(mode) end
+    self:layoutScreen()
+end
+
+function Dashboard:init()
+    self.previous_rotation = Screen:getRotationMode()
+    self:applyOrientation()
     self.page = 1
     self.last_touch = os.time()
     self._tick = function() self:onTick() end
@@ -132,7 +145,7 @@ function Dashboard:reportReady()
     UIManager:scheduleIn(1, self._poll)
 end
 
--- Debug/remote control: write one of next|prev|refresh|close|quit|restart|sleep|demo|demo off|page N to this file.
+-- Debug/remote control: next|prev|refresh|close|quit|restart|sleep|demo|demo off|page N|tap X Y.
 -- ("demo" shows fake alert/rain/low-battery notices, to check their layout.)
 -- ("sleep" forces one battery-mode sleep even when plugged in; "restart" reloads KOReader + plugin quickly.)
 -- (KOReader grabs the touchscreen, so injected touches can't reach it.)
@@ -178,8 +191,14 @@ function Dashboard:pollCommand()
             self:onClose()
             if cmd == "quit" then UIManager:quit() else UIManager:restartKOReader() end
             return
-        elseif cmd:match("^page [1-4]$") then self.page = tonumber(cmd:sub(6)); self:redraw("partial")
-        else handled = false end
+        elseif cmd:match("^page [1-4]$") then
+            self.page, self.show_settings = tonumber(cmd:sub(6)), nil
+            self:redraw("partial")
+        else
+            local x, y = cmd:match("^tap (%d+) (%d+)$")
+            handled = x ~= nil
+            if handled then self:onTap(nil, { pos = { x = tonumber(x), y = tonumber(y) } }) end
+        end
         if id then self:ackCommand(id, handled and self.page_ok) end
     end
     UIManager:scheduleIn(1, self._poll)
@@ -323,9 +342,14 @@ function Dashboard:localNow()
     return os.time() + off   -- "local" epoch; always format with "!"
 end
 
-function Dashboard:hhmm(t)
+function Dashboard:hhmm(t, omit_period)
     if self.settings.clock_24h then return os.date("!%H:%M", t) end
-    return (os.date("!%I:%M", t):gsub("^0", ""))
+    local format = omit_period and "!%I:%M" or "!%I:%M %p"
+    return (os.date(format, t):gsub("^0", ""))
+end
+
+function Dashboard:tr(label)
+    return self.settings.language == "zh" and Chinese[label] or label
 end
 
 -- ---------------------------------------------------------------- pages
@@ -342,14 +366,82 @@ function Dashboard:dots()
     return g
 end
 
+local SETTING_ROWS = {
+    { key = "language", label = "语言 / Language", options = { { "中文", "zh" }, { "English", "en" } } },
+    { key = "clock_24h", label = "Time format", options = { { "12 h", false }, { "24 h", true } } },
+    { key = "landscape", label = "Orientation", options = { { "Portrait", false }, { "Landscape", true } } },
+}
+local PANEL_W, PANEL_H, PANEL_TOP, SETTING_ROW_H = 760, 400, 90, 92
+local SETTING_LABEL_W, SETTING_CHOICE_W = 290, 210
+local PANEL_CONTENT_W = SETTING_LABEL_W + 2 * SETTING_CHOICE_W
+local PANEL_CONTENT_H = PANEL_TOP + #SETTING_ROWS * SETTING_ROW_H
+local FOOTER_H, FOOTER_BOTTOM, GEAR_W, GEAR_RIGHT = 88, 26, 100, 20
+
+function Dashboard:settingsPanel()
+    local rows = VerticalGroup:new{ align = "center", box(PANEL_CONTENT_W, PANEL_TOP, txt(self:tr("Settings"), BOLD, 44)) }
+    for _, row in ipairs(SETTING_ROWS) do
+        local controls = HorizontalGroup:new{ align = "center",
+            box(SETTING_LABEL_W, SETTING_ROW_H, txt(self:tr(row.label), BOLD, 30), "left") }
+        for _, option in ipairs(row.options) do
+            local selected = self.settings[row.key] == option[2]
+            table.insert(controls, FrameContainer:new{
+                bordersize = 2, radius = 8, padding = 0, margin = 0, color = BLACK,
+                background = selected and BLACK or WHITE,
+                box(SETTING_CHOICE_W - 4, 62, txt(self:tr(option[1]), BOLD, 32, selected and WHITE or BLACK)),
+            })
+        end
+        table.insert(rows, controls)
+    end
+    return FrameContainer:new{
+        bordersize = 3, radius = 18, padding = 0, margin = 0, color = BLACK, background = WHITE,
+        overlap_offset = { math.floor((self.W - PANEL_W) / 2), math.floor((self.H - PANEL_H) / 2) },
+        fixed(PANEL_W - 6, PANEL_H - 6, box(PANEL_W - 6, PANEL_H - 6, rows)),
+    }
+end
+
+function Dashboard:onSettingsTap(pos)
+    local x = pos.x - math.floor((self.W - PANEL_CONTENT_W) / 2) - SETTING_LABEL_W
+    local y = pos.y - math.floor((self.H - PANEL_CONTENT_H) / 2) - PANEL_TOP
+    local row = SETTING_ROWS[math.floor(y / SETTING_ROW_H) + 1]
+    if row and x >= 0 and x < 2 * SETTING_CHOICE_W then
+        local key, value = row.key, row.options[1 + math.floor(x / SETTING_CHOICE_W)][2]
+        if self.settings[key] ~= value then
+            self.settings[key] = value
+            G_reader_settings:saveSetting("deskdash_" .. key, value)
+            G_reader_settings:flush()
+            if key == "landscape" then
+                self.show_settings = nil
+                self:applyOrientation()
+                self:writeRotation()
+            end
+            self:redraw("full")
+        end
+    elseif pos.x < (self.W - PANEL_W) / 2 or pos.x >= (self.W + PANEL_W) / 2
+        or pos.y < (self.H - PANEL_H) / 2 or pos.y >= (self.H + PANEL_H) / 2 then
+        self.show_settings = nil
+        self:redraw("ui")
+    end
+end
+
+function Dashboard:footer()
+    local footer = OverlapGroup:new{
+        dimen = Geom:new{ w = self.W, h = FOOTER_H },
+        overlap_offset = { 0, self.H - FOOTER_H - FOOTER_BOTTOM },
+        box(self.W, FOOTER_H, self:dots()),
+        box(GEAR_W, FOOTER_H, txt(Weather.ICON.settings, ICONS, 38)),
+    }
+    footer[2].overlap_offset = { self.W - GEAR_W - GEAR_RIGHT, 0 }
+    return footer
+end
+
 function Dashboard:header(title)
     local s = self.settings
     return VerticalGroup:new{ align = "center",
-        vspan(38),
-        txt(title, BOLD, 46, BLACK),
+        vspan(self.landscape and 22 or 38),
+        txt(self:tr(title), BOLD, 46, BLACK),
         vspan(8),
         txt((s.city or "") .. "  ·  " .. self:hhmm(self:localNow()), SANS, 34, GRAY, self.W - 80),
-        vspan(30),
+        vspan(self.landscape and 18 or 30),
     }
 end
 
@@ -359,45 +451,71 @@ local OBS_MAX_AGE = 2 * 3600
 function Dashboard:currentConditions()
     local c, o = self.data.current, self.obs
     if o and o.code and os.time() - o.t < OBS_MAX_AGE then
-        local _, icon = Weather.describe(o.code, c.is_day == 1)
-        return o.text, icon
+        local label, icon = Weather.describe(o.code, c.is_day == 1)
+        return self.settings.language == "zh" and self:tr(label) or o.text, icon
     end
-    return Weather.describe(c.weather_code, c.is_day == 1)
+    local label, icon = Weather.describe(c.weather_code, c.is_day == 1)
+    return self:tr(label), icon
 end
 
 function Dashboard:pageNow()
     local t, d = self:localNow(), self.data
+    local wide = self.landscape
     local date = os.date("!%A, %b ", t) .. tonumber(os.date("!%d", t))
+    if self.settings.language == "zh" then
+        date = string.format("%d月%d日 %s", tonumber(os.date("!%m", t)), tonumber(os.date("!%d", t)), self:tr(os.date("!%A", t)))
+    end
     local function fmt(at) return self:hhmm(at) end
-    local alert = Weather.activeAlert(self.alerts, t, fmt)
-    local precip = d and Weather.precipSummary(d.hourly, t, fmt)
-    if self.demo then alert, precip = "Wind Advisory until 18:00", "16:00–17:00 · 70% precip" end
+    local alert_format, precip_format = self:tr("%s until %s"), self:tr("%s–%s · %d%% precip")
+    local alert = Weather.activeAlert(self.alerts, t, fmt, alert_format)
+    local precip = d and Weather.precipSummary(d.hourly, t, fmt, precip_format)
+    if self.demo then
+        local midnight = t - t % 86400
+        alert = string.format(alert_format, "Wind Advisory", fmt(midnight + 18 * 3600))
+        precip = string.format(precip_format, fmt(midnight + 16 * 3600), fmt(midnight + 17 * 3600), 70)
+    end
     local extra = (alert and 1 or 0) + (precip and 1 or 0)   -- make room for the notice lines
-    -- Big type: NotoSans digits are tabular, so "00:00" is as wide as "14:55" (~995 px of 1072 at 400 px).
-    local g = VerticalGroup:new{ align = "center",
-        txt(self:hhmm(t), HEAVY, 400 - 30 * extra),   -- each notice line takes room from the clock and weather row
-        vspan(-36),   -- reclaim the large clock font's blank space below the digits
-        txt(date, BOLD, 82),
-        vspan(42 - 16 * extra),
+    -- Leave space beside the clock for the period marker in 12-hour mode.
+    local clock_px = wide and 244 or (self.settings.clock_24h and 400 or 350) - 30 * extra
+    local clock = HorizontalGroup:new{ align = "bottom", txt(self:hhmm(t, true), HEAVY, clock_px) }
+    if not self.settings.clock_24h then
+        table.insert(clock, hspan(16))
+        table.insert(clock, VerticalGroup:new{ txt(os.date("!%p", t), BOLD, wide and 34 or 46), vspan(wide and 54 or 77) })
+    end
+    local clock_block = VerticalGroup:new{ align = "center", clock,
+        vspan(wide and -20 or -36),   -- reclaim the clock font's blank space below the digits
+        txt(date, BOLD, wide and 58 or 82, BLACK, wide and math.floor(self.W / 2) - 56 or self.W - 64),
     }
+    local weather = VerticalGroup:new{ align = "center" }
     if d then
         local c, daily = d.current, d.daily
         local day_index, is_today = Weather.firstForecastDay(daily, t)
         local cond, icon = self:currentConditions()
-        table.insert(g, HorizontalGroup:new{ align = "center",
-            txt(icon, ICONS, 246 - 20 * extra), hspan(60), txt(deg(c.temperature_2m), HEAVY, 288 - 20 * extra) })
-        table.insert(g, vspan(6 - 3 * extra))
-        table.insert(g, txt(cond, BOLD, 84, BLACK, self.W - 80))
-        table.insert(g, vspan(8))
+        table.insert(weather, HorizontalGroup:new{ align = "center",
+            txt(icon, ICONS, wide and 174 or 246 - 20 * extra), hspan(wide and 32 or 60),
+            txt(deg(c.temperature_2m), HEAVY, wide and 198 or 288 - 20 * extra) })
+        table.insert(weather, vspan(wide and -20 or 6 - 3 * extra))
+        table.insert(weather, txt(cond, BOLD, wide and 56 or 84, BLACK, wide and math.floor(self.W / 2) - 56 or self.W - 80))
+        table.insert(weather, vspan(8))
         local hi = is_today and daily.temperature_2m_max[day_index]
         local lo = is_today and daily.temperature_2m_min[day_index]
-        table.insert(g, txt("H " .. deg(hi) .. "    L " .. deg(lo), BOLD, 80))
+        table.insert(weather, txt(self:tr("H") .. " " .. deg(hi) .. "    " .. self:tr("L") .. " " .. deg(lo), BOLD, wide and 48 or 80))
     else
-        table.insert(g, txt("Weather unavailable", BOLD, 56, GRAY))
-        table.insert(g, txt("Check Wi-Fi · tap to retry", SANS, 40, GRAY))
+        table.insert(weather, txt(self:tr("Weather unavailable"), BOLD, 56, GRAY))
+        table.insert(weather, txt(self:tr("Check Wi-Fi · tap to retry"), SANS, 40, GRAY))
+    end
+    local g = VerticalGroup:new{ align = "center" }
+    if wide then
+        local column_w = math.floor((self.W - 72) / 2)
+        local column_h = math.max(clock_block:getSize().h, weather:getSize().h)
+        table.insert(g, HorizontalGroup:new{ box(column_w, column_h, clock_block), box(column_w, column_h, weather) })
+    else
+        table.insert(g, clock_block)
+        table.insert(g, vspan(42 - 16 * extra))
+        table.insert(g, weather)
     end
     local I = Weather.ICON
-    if alert or precip then table.insert(g, vspan(20)) end
+    if alert or precip then table.insert(g, vspan(wide and 36 or 20)) end
     if alert then
         table.insert(g, HorizontalGroup:new{ align = "center", txt(I.warning, ICONS, 40), hspan(16),
             txt(alert, BOLD, 40, BLACK, self.W - 160) })
@@ -412,12 +530,16 @@ end
 function Dashboard:pageHourly()
     local g = self:header("HOURLY FORECAST")
     local h = self.data and self.data.hourly
-    if not h then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
+    if not h then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local now = self:localNow()
     local first = Weather.firstForecastHour(h, now)
     local last = math.min(first + 11, #h.time - 1)
-    if first > last then table.insert(g, txt("Forecast unavailable", SANS, 48, GRAY)); return g end
-    local rowW, rowH = self.W - 88, 92
+    if first > last then table.insert(g, txt(self:tr("Forecast unavailable"), SANS, 48, GRAY)); return g end
+    local wide = self.landscape
+    local rowW, rowH = wide and math.floor((self.W - 124) / 2) or self.W - 88, wide and 120 or 92
+    local timeW, iconW, precipW = wide and 230 or 280, wide and 130 or 170, wide and 130 or 180
+    local left, right = VerticalGroup:new{}, VerticalGroup:new{}
+    local left_end = wide and math.min(first + 5, last) or last
     for i = first, last do
         local t = parseWallTime(h.time[i])
         local is_now = i == first and t <= now
@@ -428,15 +550,19 @@ function Dashboard:pageHourly()
             temperature = self.data.current.temperature_2m
         end
         local p = Weather.hourlyPrecipChance(h, i)
-        local label = is_now and "Now" or self:hhmm(t)
-        table.insert(g, HorizontalGroup:new{ align = "center",
-            box(260, rowH, txt(label, is_now and BOLD or SANS, 54), "left"),
-            box(170, rowH, txt(icon, ICONS, 68)),
-            box(200, rowH, txt(p .. "%", SANS, 46, GRAY), "right"),
-            box(rowW - 630, rowH, txt(deg(temperature), BOLD, 58), "right"),
+        local label = is_now and self:tr("Now") or self:hhmm(t)
+        local column = i <= left_end and left or right
+        table.insert(column, HorizontalGroup:new{ align = "center",
+            box(timeW, rowH, txt(label, is_now and BOLD or SANS, self.settings.clock_24h and 54 or 46), "left"),
+            box(iconW, rowH, txt(icon, ICONS, 68)),
+            box(precipW, rowH, txt(p .. "%", SANS, 46, GRAY), "right"),
+            box(rowW - timeW - iconW - precipW, rowH, txt(deg(temperature), BOLD, 58), "right"),
         })
-        if i < last then table.insert(g, LineWidget:new{ dimen = Geom:new{ w = rowW, h = 2 }, background = LIGHT }) end
+        if i ~= left_end and i < last then
+            table.insert(column, LineWidget:new{ dimen = Geom:new{ w = rowW, h = 2 }, background = LIGHT })
+        end
     end
+    table.insert(g, wide and HorizontalGroup:new{ left, hspan(36), fixed(rowW, right:getSize().h, right) } or left)
     return g
 end
 
@@ -461,20 +587,21 @@ end
 function Dashboard:pageDaily()
     local g = self:header("7-DAY FORECAST")
     local d = self.data and self.data.daily
-    if not d then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
+    if not d then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local first, is_today = Weather.firstForecastDay(d, self:localNow())
-    if not first then table.insert(g, txt("Forecast unavailable", SANS, 48, GRAY)); return g end
+    if not first then table.insert(g, txt(self:tr("Forecast unavailable"), SANS, 48, GRAY)); return g end
     local last = math.min(first + 6, #d.time)
     local min_all, max_all = math.huge, -math.huge
     for i = first, last do
         min_all = math.min(min_all, d.temperature_2m_min[i]); max_all = math.max(max_all, d.temperature_2m_max[i])
     end
-    local rowW, rowH = self.W - 120, 157
+    local rowW, rowH = self.W - 120, self.landscape and 105 or 157
     local barWidth = rowW - 170 - 110 - 120 - 28 - 28 - 120
     for i = first, last do
         local _, icon = Weather.describe(d.weather_code[i], true)
         local today = i == first and is_today
-        local day = today and "Today" or os.date("!%a", parseWallTime(d.time[i]))
+        local weekday_format = self.settings.language == "zh" and "!%A" or "!%a"
+        local day = today and self:tr("Today") or self:tr(os.date(weekday_format, parseWallTime(d.time[i])))
         table.insert(g, HorizontalGroup:new{ align = "center",
             box(170, rowH, txt(day, today and BOLD or SANS, 54), "left"),
             box(110, rowH, txt(icon, ICONS, 66)),
@@ -492,27 +619,33 @@ function Dashboard:pageDaily()
 end
 
 function Dashboard:tile(icon, label, value, sub, w, h)
-    local border, pl, pt = 3, 32, 18
+    local wide = self.landscape
+    local border, pl, pt = 3, wide and 20 or 32, wide and 0 or 18
+    local text_w = w - 2 * border - pl - 16
+    local inner_w, inner_h = w - 2 * border - pl, h - 2 * border - pt
+    local content = VerticalGroup:new{ align = "left",
+        HorizontalGroup:new{ align = "center", box(50, 44, txt(icon, ICONS, 40, GRAY), "left"),
+            txt(self:tr(label), BOLD, wide and 25 or 32, GRAY, text_w - 50) },
+        vspan(2),
+        txt(value, HEAVY, wide and 68 or 82, BLACK, text_w),
+        txt(sub or " ", SANS, wide and 27 or 36, GRAY, text_w),
+    }
     return FrameContainer:new{
         radius = 28, bordersize = border, color = BLACK, background = WHITE,
         padding = 0, padding_left = pl, padding_top = pt, margin = 0,
-        fixed(w - 2 * border - pl, h - 2 * border - pt, VerticalGroup:new{ align = "left",
-            HorizontalGroup:new{ align = "center", box(54, 44, txt(icon, ICONS, 40, GRAY), "left"), txt(label, BOLD, 32, GRAY) },
-            vspan(2),
-            txt(value, HEAVY, 82),
-            txt(sub or " ", SANS, 36, GRAY, w - 60),
-        }),
+        wide and box(inner_w, inner_h, content, "left") or fixed(inner_w, inner_h, content),
     }
 end
 
 function Dashboard:pageDetails()
     local g = self:header("DETAILS")
     local d = self.data
-    if not d then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
+    if not d then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local W, c, day, I = Weather, d.current, d.daily, Weather.ICON
     local units = (type(d.current_units) == "table" and d.current_units.wind_speed_10m) or "km/h"
     local punits = d.daily_units.precipitation_sum or "mm"
-    local tw, th, gap = math.floor((self.W - 80 - 22) / 2), 263, 22
+    local columns, th, gap = self.landscape and 4 or 2, self.landscape and 340 or 263, 22
+    local tw = math.floor((self.W - 80 - (columns - 1) * gap) / columns)
     local now = self:localNow()
     local today, is_today = W.firstForecastDay(day, now)
     if not is_today then today = nil end
@@ -525,40 +658,45 @@ function Dashboard:pageDetails()
     end
     -- Sun: show the next event big and the other one small (like iOS).
     local rise, set = day.sunrise[today], day.sunset[today]
-    local sun_label, sun_icon, sun_value, sun_sub = "SUN", I.sunrise, "--", "Unavailable"
+    local sun_label, sun_icon, sun_value, sun_sub = "SUN", I.sunrise, "--", self:tr("Unavailable")
     if rise and now < rise then
         sun_label, sun_value = "SUNRISE", self:hhmm(rise)
-        sun_sub = set and ("Sunset " .. self:hhmm(set))
+        sun_sub = set and (self:tr("Sunset") .. " " .. self:hhmm(set))
     elseif set and now < set then
         sun_label, sun_icon, sun_value = "SUNSET", I.sunset, self:hhmm(set)
-        sun_sub = rise and ("Sunrise " .. self:hhmm(rise))
+        sun_sub = rise and (self:tr("Sunrise") .. " " .. self:hhmm(rise))
     elseif day.sunrise[tomorrow] then
         sun_label, sun_value = "SUNRISE", self:hhmm(day.sunrise[tomorrow])
-        sun_sub = set and ("Sunset " .. self:hhmm(set))
+        sun_sub = set and (self:tr("Sunset") .. " " .. self:hhmm(set))
     end
     local moon_name, moon_lit, moon_icon = W.moon(os.time())
     local aq = self.aq
     local uv = day.uv_index_max[today]
     local tiles = {
         self:tile(I.thermometer, "FEELS LIKE", deg(c.apparent_temperature),
-            diff and math.abs(diff) >= 2 and (diff < 0 and "Colder than actual" or "Warmer than actual"), tw, th),
+            diff and math.abs(diff) >= 2 and self:tr(diff < 0 and "Colder than actual" or "Warmer than actual"), tw, th),
         self:tile(I.humidity, "HUMIDITY", c.relative_humidity_2m and (math.floor(c.relative_humidity_2m + 0.5) .. "%") or "--",
-            c.dew_point_2m and ("Dew point " .. deg(c.dew_point_2m)), tw, th),
+            c.dew_point_2m and (self:tr("Dew point") .. " " .. deg(c.dew_point_2m)), tw, th),
         self:tile(I.wind, "WIND", c.wind_speed_10m and tostring(math.floor(c.wind_speed_10m + 0.5)) or "--",
-            c.wind_speed_10m and (units .. " " .. W.compass(c.wind_direction_10m)
-            .. (c.wind_gusts_10m and (" · Gusts " .. math.floor(c.wind_gusts_10m + 0.5)) or "")), tw, th),
+            c.wind_speed_10m and (units .. " " .. self:tr(W.compass(c.wind_direction_10m))
+            .. (c.wind_gusts_10m and (" · " .. self:tr("Gusts") .. " " .. math.floor(c.wind_gusts_10m + 0.5)) or "")), tw, th),
         self:tile(I.uv, "UV MAX TODAY", type(uv) == "number" and tostring(math.floor(uv + 0.5)) or "--",
-            type(uv) == "number" and W.uvLevel(uv) or "Unavailable", tw, th),
+            self:tr(type(uv) == "number" and W.uvLevel(uv) or "Unavailable"), tw, th),
         self:tile(I.umbrella, "PRECIP FORECAST", amount(day.precipitation_sum[today]),
-            "Tomorrow " .. amount(day.precipitation_sum[tomorrow]), tw, th),
+            self:tr("Tomorrow") .. " " .. amount(day.precipitation_sum[tomorrow]), tw, th),
         self:tile(I.smog, "AQI ESTIMATE", aq and tostring(math.floor(aq + 0.5)) or "--",
-            aq and W.aqiLevel(aq) or "Unavailable", tw, th),
+            self:tr(aq and W.aqiLevel(aq) or "Unavailable"), tw, th),
         self:tile(sun_icon, sun_label, sun_value, sun_sub, tw, th),
-        self:tile(moon_icon, "MOON", math.floor(moon_lit * 100 + 0.5) .. "%", moon_name, tw, th),
+        self:tile(moon_icon, "MOON", math.floor(moon_lit * 100 + 0.5) .. "%", self:tr(moon_name), tw, th),
     }
-    for r = 0, 3 do
-        table.insert(g, HorizontalGroup:new{ tiles[r * 2 + 1], hspan(gap), tiles[r * 2 + 2] })
-        if r < 3 then table.insert(g, vspan(gap)) end
+    for first = 1, #tiles, columns do
+        if first > 1 then table.insert(g, vspan(gap)) end
+        local row = HorizontalGroup:new{}
+        for i = first, first + columns - 1 do
+            if i > first then table.insert(row, hspan(gap)) end
+            table.insert(row, tiles[i])
+        end
+        table.insert(g, row)
     end
     return g
 end
@@ -570,7 +708,7 @@ function Dashboard:batteryBadge()
     local I = Weather.ICON
     return HorizontalGroup:new{ align = "center", overlap_offset = { 40, self.H - 96 },
         txt(pct <= 5 and I.battery_empty or I.battery_low, ICONS, 40), hspan(24),
-        txt(pct .. "%  Charge me", BOLD, 34) }
+        txt(pct .. "%  " .. self:tr("Charge me"), BOLD, 34) }
 end
 
 function Dashboard:rebuild()
@@ -579,17 +717,19 @@ function Dashboard:rebuild()
     self.page_ok = ok
     if not ok then
         logger.err("deskdash: page build failed", content)
-        content = VerticalGroup:new{ align = "center", vspan(500), txt("Something went wrong", BOLD, 56),
+        content = VerticalGroup:new{ align = "center", vspan(350), txt(self:tr("Something went wrong"), BOLD, 56),
             txt(tostring(content):sub(1, 60), SANS, 28, GRAY, self.W - 80) }
     end
+    local page = OverlapGroup:new{ dimen = Geom:new{ w = self.W, h = self.H },
+        CenterContainer:new{ dimen = Geom:new{ w = self.W, h = self.H - (self.page == 1 and 88 or 120) }, ignore_if_over = "height",
+            VerticalGroup:new{ align = "center", content } },
+    }
+    if self.page ~= 1 then table.insert(page, self:footer()) end
+    local badge = self:batteryBadge()
+    if badge then table.insert(page, badge) end
+    if self.show_settings then table.insert(page, self:settingsPanel()) end
     self[1] = FrameContainer:new{
-        width = self.W, height = self.H, background = WHITE, bordersize = 0, padding = 0, margin = 0,
-        OverlapGroup:new{ dimen = Geom:new{ w = self.W, h = self.H },
-            CenterContainer:new{ dimen = Geom:new{ w = self.W, h = self.H - 120 }, ignore_if_over = "height",
-                overlap_offset = { 0, 0 }, VerticalGroup:new{ align = "center", content } },
-            CenterContainer:new{ dimen = Geom:new{ w = self.W, h = 40 }, overlap_offset = { 0, self.H - 90 }, self:dots() },
-            self:batteryBadge(),
-        },
+        width = self.W, height = self.H, background = WHITE, bordersize = 0, padding = 0, margin = 0, page,
     }
 end
 
@@ -607,7 +747,9 @@ end
 
 function Dashboard:onTick()
     self:powerTick()
-    if self.page ~= 1 and os.time() - self.last_touch >= IDLE_RETURN then self.page = 1 end
+    if self.page ~= 1 and os.time() - self.last_touch >= IDLE_RETURN then
+        self.page, self.show_settings = 1, nil
+    end
     local now = self:localNow()
     if not Weather.isNight(now, NIGHT) and os.time() >= self.next_fetch_at then self:refreshWeather() end
     self:redraw(tonumber(os.date("!%M", now)) % FLASH_EVERY == 0 and "full" or "ui")
@@ -669,6 +811,7 @@ end
 
 function Dashboard:onSwipe(_, ges)
     self.last_touch = os.time()
+    if self.show_settings then return true end
     local dir = ges.direction
     if dir == "west" or dir == "east" then
         self.page = (self.page - 1 + (dir == "west" and 1 or -1)) % PAGES + 1
@@ -678,12 +821,28 @@ function Dashboard:onSwipe(_, ges)
 end
 
 function Dashboard:onHold()
-    self:onClose()
+    if self.show_settings then
+        self.show_settings = nil
+        self:redraw("ui")
+    else
+        self:onClose()
+    end
     return true
 end
 
-function Dashboard:onTap()
+function Dashboard:onTap(_, ges)
     self.last_touch = os.time()
+    local pos = ges and ges.pos
+    if pos and self.show_settings then
+        self:onSettingsTap(pos)
+        return true
+    end
+    if pos and self.page ~= 1 and pos.x >= self.W - GEAR_W - GEAR_RIGHT
+        and pos.y >= self.H - FOOTER_H - FOOTER_BOTTOM then
+        self.show_settings = true
+        self:redraw("ui")
+        return true
+    end
     self:refreshWeather()
     self:redraw("full")
     return true
@@ -704,6 +863,7 @@ function Dashboard:onCloseWidget()
     UIManager:unschedule(self._ready)
     UIManager:unschedule(self._initial_fetch)
     os.remove(ROTATION_FILE)
+    if Screen:getRotationMode() ~= self.previous_rotation then Screen:setRotationMode(self.previous_rotation) end
 end
 
 return Dashboard

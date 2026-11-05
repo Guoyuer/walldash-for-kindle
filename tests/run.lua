@@ -33,6 +33,9 @@ eq("hourly probability uses interval end", W.hourlyPrecipChance(hourly, 2), 70)
 eq("low probability rounds to five", W.hourlyPrecipChance(hourly, 1), 5)
 eq("small probability rounds to zero", W.hourlyPrecipChance(hourly, 3), 0)
 eq("summary agrees with hourly row", W.precipSummary(hourly, W.parseWallTime("2026-11-05T15:30"), hm), "16:00–17:00 · 70% precip")
+local Chinese = require("deskdash_chinese")
+eq("Chinese precipitation summary", W.precipSummary(hourly, W.parseWallTime("2026-11-05T15:30"), hm,
+    Chinese["%s–%s · %d%% precip"]), "16:00–17:00 · 降水 70%")
 eq("current interval remains eligible", W.precipSummary(hourly, W.parseWallTime("2026-11-05T16:15"), hm), "16:00–17:00 · 70% precip")
 eq("expired interval ignored", W.precipSummary(hourly, W.parseWallTime("2026-11-05T17:00"), hm), nil)
 eq("missing hourly forecast", W.precipSummary(nil, 0, hm), nil)
@@ -88,6 +91,8 @@ eq("expired daily forecast", W.firstForecastDay(daily, W.parseWallTime("2026-11-
 local now = W.parseWallTime("2026-11-05T15:00")
 eq("no alerts", W.activeAlert(nil, now, hm), nil)
 eq("active alert", W.activeAlert({ { event = "Wind Advisory", ends = "2026-11-05T18:00:00-05:00" } }, now, hm), "Wind Advisory until 18:00")
+eq("Chinese alert preserves provider title", W.activeAlert({ { event = "Wind Advisory", ends = "2026-11-05T18:00:00-05:00" } },
+    now, hm, Chinese["%s until %s"]), "Wind Advisory · 至 18:00")
 eq("expired alert skipped", W.activeAlert({ { event = "Old", ends = "2026-11-05T14:00:00-05:00" },
     { event = "Flood Watch", ends = "2026-11-06T06:00:00-05:00" } }, now, hm), "Flood Watch until 06:00")
 eq("alert without end", W.activeAlert({ { event = "Heat Advisory" } }, now, hm), "Heat Advisory")

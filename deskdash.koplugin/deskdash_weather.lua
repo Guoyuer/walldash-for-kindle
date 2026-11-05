@@ -33,7 +33,7 @@ Weather.ICON = {
     thermometer = U(0xE350), humidity = U(0xE373), wind = U(0xE34B),
     uv = SUN, sunrise = U(0xE34C), sunset = U(0xE34D),
     umbrella = U(0xE37C), smog = U(0xE36D),
-    warning = U(0xF071), battery_low = U(0xF243), battery_empty = U(0xF244),   -- FontAwesome
+    warning = U(0xF071), settings = U(0xF013), battery_low = U(0xF243), battery_empty = U(0xF244),   -- FontAwesome
 }
 
 local CODES = {
@@ -284,24 +284,24 @@ function Weather.firstForecastDay(daily, local_now)
 end
 
 --- Summarize the first high-probability interval starting within the next three hours.
-function Weather.precipSummary(h, now, fmt)
+function Weather.precipSummary(h, now, fmt, template)
     if not h then return nil end
     for i = Weather.firstForecastHour(h, now), #h.time - 1 do
         local starts = parseWallTime(h.time[i])
         if starts >= now + 3 * 3600 then break end
         local p = Weather.hourlyPrecipChance(h, i)
         if p >= 60 then
-            return string.format("%s–%s · %d%% precip", fmt(starts), fmt(parseWallTime(h.time[i + 1])), p)
+            return string.format(template or "%s–%s · %d%% precip", fmt(starts), fmt(parseWallTime(h.time[i + 1])), p)
         end
     end
 end
 
 --- Most severe alert that hasn't ended at "local" epoch now, e.g. "Wind Advisory until 18:00", or nil.
-function Weather.activeAlert(alerts, now, fmt)
+function Weather.activeAlert(alerts, now, fmt, template)
     for _, a in ipairs(alerts or {}) do
         local ends = type(a.ends) == "string" and parseWallTime(a.ends:sub(1, 16))
         if not ends then return a.event end
-        if ends > now then return a.event .. " until " .. fmt(ends) end
+        if ends > now then return string.format(template or "%s until %s", a.event, fmt(ends)) end
     end
 end
 
