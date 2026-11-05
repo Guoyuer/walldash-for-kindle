@@ -86,6 +86,11 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   `restore()` turns light + Wi-Fi back on when staying awake (power button, charger, dashboard closed). Only Wi-Fi the
   plugin switched off is switched back on.
 - The `sleep` command forces one cycle even when plugged in.
+- **Power log** `/mnt/us/deskdash_power.csv` (`powerTick`/`logPower`): one row per hour + on plug/unplug/start/close.
+  Counters (wakes, power-button wakes, fetches, failures, Wi-Fi wait s) are in memory; awake_s is the delta of
+  KOReader's monotonic clock (stops during suspend), so it costs nothing per wake. charge_mAh = fuel-gauge coulomb
+  counter (`bd71827_bat/charge_now`, µAh), its drop per hour = average mA. `python tools/power.py` fetches it and
+  prints mA per interval, awake %, projected days, and a fit mA = asleep + k·awake. Use it to judge power changes.
 - Bypasses the stock powerd (it keeps `preventScreenSaver 1`); powerd hasn't objected so far.
 
 ## Known quirks / decisions
