@@ -23,6 +23,7 @@ local VerticalSpan = require("ui/widget/verticalspan")
 local logger = require("logger")
 local time = require("ui/time")
 local Weather = require("deskdash_weather")
+local Bench = require("deskdash_benchmark")
 local Chinese = require("deskdash_chinese")
 local parseWallTime = Weather.parseWallTime
 local Screen = Device.screen
@@ -152,9 +153,12 @@ end
 local CMD_FILE = "/tmp/deskdash_cmd"
 local ACK_FILE = "/tmp/deskdash_ack"
 
-function Dashboard:ackCommand(id, ok)
+function Dashboard:ackCommand(id, ok, sample)
     UIManager:forceRePaint()
+    Bench.mark(sample, "submit")
     UIManager:waitForVSync()
+    Bench.mark(sample, "epdc_wait")
+    Bench.finish(sample)
     local file = io.open(ACK_FILE .. ".new", "w")
     if file then
         file:write(id, " ", ok and "ok" or "error", "\n")
@@ -175,8 +179,14 @@ function Dashboard:pollCommand()
             self.last_touch = os.time()
         end
         local handled = true
+        local kind = cmd == "refresh" and "refresh_input" or "command"
+        local sample = Bench.start(id and self.benchmark, kind)
         logger.info("deskdash: command", cmd)
-        if cmd == "sleep" then self.last_touch = 0; self.force_sleep = true; UIManager:nextTick(self._sleep)
+        if cmd == "bench on" or cmd == "bench off" then self.benchmark = cmd == "bench on"
+        elseif cmd == "sleep" then
+            self.last_touch, self.force_sleep = 0, true
+            UIManager:unschedule(self._tick)
+            self:onTick()
         elseif cmd == "demo" or cmd == "demo off" then self.demo = (cmd == "demo"); self:redraw("full")
         elseif cmd == "next" then self:onSwipe(nil, { direction = "west" })
         elseif cmd == "prev" then self:onSwipe(nil, { direction = "east" })
@@ -199,7 +209,8 @@ function Dashboard:pollCommand()
             handled = x ~= nil
             if handled then self:onTap(nil, { pos = { x = tonumber(x), y = tonumber(y) } }) end
         end
-        if id then self:ackCommand(id, handled and self.page_ok) end
+        Bench.mark(sample, "dispatch")
+        if id then self:ackCommand(id, handled and self.page_ok, sample) end
     end
     UIManager:scheduleIn(1, self._poll)
 end
@@ -217,11 +228,16 @@ function Dashboard:refreshWeather()
     local started_at = os.time()
     self.next_fetch_at = started_at + 60  -- retry on the next eligible minute tick if this fetch fails
     self.pw.fetches = self.pw.fetches + 1
+    local sample = Bench.start(self.benchmark, "weather")
     self:setWifi(true)
-    if not self:waitForWifi() then
+    local connected = self:waitForWifi()
+    Bench.mark(sample, "wifi")
+    if not connected then
         self.pw.fails = self.pw.fails + 1
+        Bench.finish(sample)
         return
     end
+    Bench.mark(sample, "locate")
     if not (s.lat and s.lon) or not self.offset then
         local loc = W.locate()
         if loc then
@@ -232,12 +248,16 @@ function Dashboard:refreshWeather()
     local ok = false
     if s.lat and s.lon then
         local data, err = W.fetch(s.lat, s.lon, s.units)
+        Bench.mark(sample, "forecast")
         if data then self.data = data; ok = true else logger.warn("deskdash: fetch failed", err) end
         self.alerts = W.alerts(s.lat, s.lon) or self.alerts
+        Bench.mark(sample, "alerts")
         if ok then
             self.aq = W.airQuality(s.lat, s.lon) or self.aq
+            Bench.mark(sample, "aqi")
             self.nws = self.nws or {}
             self.obs = W.observation(s.lat, s.lon, self.nws) or self.obs
+            Bench.mark(sample, "observation")
         end
     end
     if ok then
@@ -245,6 +265,7 @@ function Dashboard:refreshWeather()
     else
         self.pw.fails = self.pw.fails + 1
     end
+    Bench.finish(sample)
 end
 
 -- Battery mode switches Wi-Fi off between weather fetches (it otherwise reassociates at every minute wake).
@@ -751,15 +772,19 @@ function Dashboard:scheduleTick()
 end
 
 function Dashboard:onTick()
+    local sample = Bench.start(self.benchmark, "wake")
     self:powerTick()
     if self.page ~= 1 and os.time() - self.last_touch >= IDLE_RETURN then
         self.page, self.show_settings = 1, nil
     end
     local now = self:localNow()
     if not Weather.isNight(now, NIGHT) and os.time() >= self.next_fetch_at then self:refreshWeather() end
+    Bench.mark(sample, "tick_and_weather")
     self:redraw(tonumber(os.date("!%M", now)) % FLASH_EVERY == 0 and "full" or "ui")
     self:scheduleTick()
     if self:canSleep() then
+        self.wake_sample = sample
+        Bench.mark(sample, "build")
         UIManager:nextTick(self._sleep)
     else
         self:restore()   -- staying awake (e.g. charger plugged in): undo the battery-mode light/Wi-Fi off
@@ -774,6 +799,8 @@ end
 -- Suspend to RAM until the next minute. KOReader's timers use a clock that stops while suspended,
 -- so the pending tick is replaced by a direct call after waking.
 function Dashboard:sleepUntilNextMinute()
+    local sample = self.wake_sample
+    self.wake_sample = nil
     if not self:canSleep() then return end
     self.force_sleep = nil
     local secs = Weather.secondsToNextWake(self:localNow(), NIGHT)   -- next minute, or next 10 minutes at night
@@ -782,7 +809,9 @@ function Dashboard:sleepUntilNextMinute()
     UIManager:unschedule(self._tick)
     -- Paint now and let the e-ink refresh finish (an interrupted refresh leaves ghosting).
     UIManager:forceRePaint()
+    Bench.mark(sample, "submit")
     UIManager:waitForVSync()
+    Bench.mark(sample, "epdc_wait")
     -- The frontlight comes back on at every resume, so switch it off while in battery mode;
     -- it (and Wi-Fi) are turned back on only when staying awake (power button, charger).
     self:setWifi(false)
@@ -791,7 +820,16 @@ function Dashboard:sleepUntilNextMinute()
         powerd:turnOffFrontlight()
         self.light_off = true
     end
-    os.execute(string.format("sync; rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
+    Bench.mark(sample, "radios")
+    if sample then
+        os.execute("sync")
+        Bench.mark(sample, "sync")
+        os.execute(string.format("rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
+    else
+        os.execute(string.format("sync; rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
+    end
+    Bench.mark(sample, "suspend_resume_awake")
+    Bench.finish(sample)
     local early = target - os.time()
     self.pw.wakes = self.pw.wakes + 1
     if early > 2 then
