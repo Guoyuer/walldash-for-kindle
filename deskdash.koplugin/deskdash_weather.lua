@@ -82,34 +82,73 @@ function Weather.locate()
     logger.warn("deskdash: locate failed", body)
 end
 
+local HOURLY = { "temperature_2m", "weather_code", "precipitation_probability", "is_day" }
+local DAILY = { "weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_probability_max", "precipitation_sum" }
+local DEFAULT_MODEL, NBM = "_best_match", "_ncep_nbm_conus"
+
+local function forecastSection(section, fields, suffix)
+    if type(section) ~= "table" or type(section.time) ~= "table" or #section.time == 0 then return nil end
+    local selected = { time = section.time }
+    for _, field in ipairs(fields) do
+        local series = section[field .. suffix]
+        if type(series) ~= "table" then return nil end
+        for i = 1, #section.time do
+            if type(series[i]) ~= "number" then return nil end
+        end
+        selected[field] = series
+    end
+    return selected
+end
+
+-- All forecast pages use the same model. Outside NBM coverage the API can return unsuffixed default fields.
+function Weather.selectForecast(t)
+    local suffix = type(t.hourly) == "table" and t.hourly.temperature_2m and "" or DEFAULT_MODEL
+    local hourly = forecastSection(t.hourly, HOURLY, NBM)
+    local daily = forecastSection(t.daily, DAILY, NBM)
+    if not (hourly and daily) then
+        hourly = forecastSection(t.hourly, HOURLY, suffix)
+        daily = forecastSection(t.daily, DAILY, suffix)
+    end
+    if not (hourly and daily) then return nil, "incomplete forecast" end
+
+    daily.sunrise = t.daily["sunrise" .. suffix]
+    daily.sunset = t.daily["sunset" .. suffix]
+    daily.uv_index_max = t.daily["uv_index_max" .. suffix]
+    local units = t.daily_units or {}
+    t.daily_units = { precipitation_sum = units["precipitation_sum" .. suffix] }
+    t.hourly, t.daily = hourly, daily
+    return t
+end
+
 --- Fetches the forecast. Returns a table, or nil + error.
 function Weather.fetch(lat, lon, units)
     local url = string.format(
         "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
         .. "&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,weather_code,"
         .. "wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day"
-        .. "&minutely_15=precipitation&forecast_minutely_15=8"
-        .. "&hourly=temperature_2m,weather_code,precipitation_probability,is_day"
-        .. "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunrise,sunset,uv_index_max"
+        .. "&hourly=" .. table.concat(HOURLY, ",")
+        .. "&daily=" .. table.concat(DAILY, ",") .. ",sunrise,sunset,uv_index_max"
+        .. "&models=best_match,ncep_nbm_conus"
         .. "&timezone=auto&forecast_days=7&forecast_hours=13%s",
         lat, lon, units == "imperial" and "&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch" or "")
     local body = curl(url)
     if not body then return nil, "no response" end
     local ok, t = pcall(json.decode, body)
-    if not ok or type(t) ~= "table" or not t.current then
+    if not ok or type(t) ~= "table" or type(t.current) ~= "table" then
         logger.warn("deskdash: bad forecast", body and body:sub(1, 200))
         return nil, "bad response"
     end
-    return t
+    return Weather.selectForecast(t)
 end
 
---- US AQI from Open-Meteo's air-quality API. Returns { aqi, pm2_5 } or nil.
+--- Current US AQI estimate from Open-Meteo's CAMS model.
 function Weather.airQuality(lat, lon)
     local body = curl(string.format(
-        "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=%.4f&longitude=%.4f&current=us_aqi,pm2_5", lat, lon))
+        "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=%.4f&longitude=%.4f&current=us_aqi", lat, lon))
     local ok, t = pcall(json.decode, body or "")
-    if ok and type(t) == "table" and t.current and t.current.us_aqi then
-        return { aqi = t.current.us_aqi, pm2_5 = t.current.pm2_5 }
+    local c = ok and type(t) == "table" and t.current
+    if type(c) == "table" and type(c.us_aqi) == "number" then
+        return c.us_aqi
     end
 end
 
@@ -196,29 +235,27 @@ function Weather.parseISO(s)
 end
 local parseISO = Weather.parseISO
 
-local SNOW_CODES = { [71] = true, [73] = true, [75] = true, [77] = true, [85] = true, [86] = true }
+-- Open-Meteo timestamps the probability at the end of the interval; the hourly row is labelled by its start.
+function Weather.hourlyPrecipChance(h, i)
+    return h.precipitation_probability[i + 1]
+end
 
---- iOS-style precipitation summary for a forecast, e.g. "Rain starting around 15:15", or nil.
---- fmt formats a "local" epoch as a time of day.
-function Weather.precipSummary(d, fmt)
-    local word = (d.current and SNOW_CODES[d.current.weather_code]) and "Snow" or "Rain"
-    local m = d.minutely_15
-    if m and m.precipitation and #m.precipitation > 0 then
-        local th = (d.minutely_15_units and d.minutely_15_units.precipitation == "inch") and 0.004 or 0.1
-        local wet_now = (m.precipitation[1] or 0) >= th
-        for i = 2, #m.precipitation do
-            if ((m.precipitation[i] or 0) >= th) ~= wet_now then
-                return string.format("%s %s around %s", word, wet_now and "stopping" or "starting", fmt(parseISO(m.time[i])))
-            end
-        end
-        if wet_now then return word .. " for the next 2 hours" end
+function Weather.firstForecastHour(h, now)
+    for i = 1, #h.time - 1 do
+        if parseISO(h.time[i + 1]) > now then return i end
     end
-    local h = d.hourly
+    return #h.time
+end
+
+--- Summarize the first high-probability interval starting within the next three hours.
+function Weather.precipSummary(h, now, fmt)
     if not h then return nil end
-    for i = 3, math.min(13, #h.time) do   -- beyond the 15-minute window
-        local p, code = h.precipitation_probability and h.precipitation_probability[i], h.weather_code[i]
-        if p and p >= 60 and code >= 51 then
-            return string.format("%s likely around %s", SNOW_CODES[code] and "Snow" or "Rain", fmt(parseISO(h.time[i])))
+    for i = Weather.firstForecastHour(h, now), #h.time - 1 do
+        local starts = parseISO(h.time[i])
+        if starts >= now + 3 * 3600 then break end
+        local p = Weather.hourlyPrecipChance(h, i)
+        if p >= 60 then
+            return string.format("%s–%s · %d%% precip", fmt(starts), fmt(parseISO(h.time[i + 1])), p)
         end
     end
 end

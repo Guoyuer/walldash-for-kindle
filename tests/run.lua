@@ -24,31 +24,42 @@ eq("parseISO epoch", W.parseISO("1970-01-01T00:00"), 0)
 eq("parseISO DST day", os.date("!%Y-%m-%d %H:%M", W.parseISO("2026-03-08T03:30")), "2026-03-08 03:30")
 eq("parseISO alert with offset", hm(W.parseISO(("2026-11-05T18:00:00-05:00"):sub(1, 16))), "18:00")
 
--- precipSummary
-local function m15(values, units)
-    local t = {}
-    for i = 1, #values do t[i] = string.format("2026-11-05T%02d:%02d", 14 + math.floor((45 + 15 * (i - 1)) / 60), (45 + 15 * (i - 1)) % 60) end
-    return { current = { weather_code = 3 }, minutely_15 = { time = t, precipitation = values },
-        minutely_15_units = { precipitation = units or "mm" } }
+local hourly = {
+    time = { "2026-11-05T15:00", "2026-11-05T16:00", "2026-11-05T17:00", "2026-11-05T18:00" },
+    precipitation_probability = { 90, 10, 70, 0 },
+}
+eq("hourly probability uses interval end", W.hourlyPrecipChance(hourly, 2), 70)
+eq("summary agrees with hourly row", W.precipSummary(hourly, W.parseISO("2026-11-05T15:30"), hm), "16:00–17:00 · 70% precip")
+eq("current interval remains eligible", W.precipSummary(hourly, W.parseISO("2026-11-05T16:15"), hm), "16:00–17:00 · 70% precip")
+eq("expired interval ignored", W.precipSummary(hourly, W.parseISO("2026-11-05T17:00"), hm), nil)
+eq("missing hourly forecast", W.precipSummary(nil, 0, hm), nil)
+
+local function forecastFixture(default_suffix, missing_nbm)
+    local h = { time = hourly.time }
+    local d = { time = { "2026-11-05" } }
+    for _, field in ipairs{ "temperature_2m", "weather_code", "precipitation_probability", "is_day" } do
+        h[field .. default_suffix] = { 1, 2, 3, 4 }
+        if default_suffix ~= "" then h[field .. "_ncep_nbm_conus"] = { 0, 12, 13, 14 } end
+    end
+    for _, field in ipairs{ "weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_probability_max", "precipitation_sum" } do
+        d[field .. default_suffix] = { 2 }
+        if default_suffix ~= "" then d[field .. "_ncep_nbm_conus"] = { 20 } end
+    end
+    if missing_nbm then d.precipitation_sum_ncep_nbm_conus = {} end
+    d["uv_index_max" .. default_suffix] = { 4 }
+    return { hourly = h, daily = d, daily_units = { ["precipitation_sum" .. default_suffix] = "inch" } }
 end
-eq("rain starting", W.precipSummary(m15{ 0, 0, 0.4, 1 }, hm), "Rain starting around 15:15")
-eq("rain stopping", W.precipSummary(m15{ 0.5, 0, 0, 0 }, hm), "Rain stopping around 15:00")
-eq("rain all window", W.precipSummary(m15{ 0.5, 0.3, 0.2, 0.2 }, hm), "Rain for the next 2 hours")
-eq("drizzle below threshold", W.precipSummary(m15{ 0, 0.05, 0.05, 0 }, hm), nil)
-eq("inch units", W.precipSummary(m15({ 0, 0.005 }, "inch"), hm), "Rain starting around 15:00")
-local snow = m15{ 0, 0.3 }; snow.current.weather_code = 73
-eq("snow wording", W.precipSummary(snow, hm), "Snow starting around 15:00")
-local hourly = m15{ 0, 0, 0, 0 }
-hourly.hourly = { time = {}, weather_code = {}, precipitation_probability = {} }
-for i = 1, 13 do
-    hourly.hourly.time[i] = string.format("2026-11-05T%02d:00", 14 + i - 1)
-    hourly.hourly.weather_code[i] = (i == 6) and 63 or 3
-    hourly.hourly.precipitation_probability[i] = (i == 6) and 80 or 10
-end
-eq("rain likely later", W.precipSummary(hourly, hm), "Rain likely around 19:00")
-hourly.hourly.precipitation_probability[6] = 40
-eq("low probability ignored", W.precipSummary(hourly, hm), nil)
-eq("no minutely, no hourly", W.precipSummary({ current = { weather_code = 0 } }, hm), nil)
+local nbm = W.selectForecast(forecastFixture("_best_match"))
+eq("NBM hourly selected including zero", nbm.hourly.temperature_2m[1], 0)
+eq("NBM daily selected", nbm.daily.precipitation_sum[1], 20)
+eq("UV uses default", nbm.daily.uv_index_max[1], 4)
+eq("units are retained", nbm.daily_units.precipitation_sum, "inch")
+local fallback = W.selectForecast(forecastFixture("_best_match", true))
+eq("missing daily NBM falls back hourly too", fallback.hourly.temperature_2m[1], 1)
+eq("missing daily NBM falls back daily", fallback.daily.precipitation_sum[1], 2)
+local outside = W.selectForecast(forecastFixture(""))
+eq("unsuffixed hourly outside coverage", outside.hourly.temperature_2m[1], 1)
+eq("unsuffixed daily outside coverage", outside.daily.temperature_2m_max[1], 2)
 
 -- activeAlert
 local now = W.parseISO("2026-11-05T15:00")
