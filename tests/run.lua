@@ -78,6 +78,15 @@ eq("night 03:00", W.isNight(at("03:00:00"), N), true)
 eq("not night 05:00", W.isNight(at("05:00:00"), N), false)
 eq("not night 01:59", W.isNight(at("01:59:59"), N), false)
 
+-- NWS observation text -> WMO code
+eq("obs cloudy", W.obsCode("Cloudy"), 3); eq("obs mostly cloudy", W.obsCode("Mostly Cloudy"), 3)
+eq("obs partly", W.obsCode("Partly Cloudy"), 2); eq("obs clear", W.obsCode("Clear"), 0); eq("obs sunny", W.obsCode("Sunny"), 0)
+eq("obs light rain+fog", W.obsCode("Light Rain and Fog/Mist"), 61); eq("obs heavy rain", W.obsCode("Heavy Rain"), 65)
+eq("obs showers", W.obsCode("Showers in Vicinity"), 80); eq("obs drizzle", W.obsCode("Light Drizzle"), 53)
+eq("obs snow", W.obsCode("Light Snow"), 71); eq("obs freezing", W.obsCode("Freezing Rain"), 66)
+eq("obs thunder", W.obsCode("Thunderstorms and Rain"), 95); eq("obs fog", W.obsCode("Fog/Mist"), 45)
+eq("obs haze", W.obsCode("Haze"), 45); eq("obs unknown", W.obsCode("Funnel Cloud?"), nil); eq("obs empty", W.obsCode(""), nil)
+
 -- small helpers
 eq("aqi good", W.aqiLevel(50), "Good"); eq("aqi moderate", W.aqiLevel(51), "Moderate")
 eq("aqi hazardous", W.aqiLevel(400), "Hazardous")

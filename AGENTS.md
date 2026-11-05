@@ -61,7 +61,11 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   at load time and are prefixed `deskdash_` to avoid name clashes.
 - `deskdash_weather.lua`: Open-Meteo forecast (incl. 15-min precipitation for the "Rain starting around…" line) +
   Open-Meteo air quality (US AQI) + NWS alerts (api.weather.gov, US only; nil elsewhere) + computed moon phase +
-  ip-api location/UTC offset, via the system `curl`
+  ip-api location/UTC offset, via the system `curl`.
+  **Current conditions come from the nearest NWS station's latest observation** (`Weather.observation`, station
+  cached after the first lookup; Queens Plaza -> KNYC Central Park), mapped to a WMO code by `Weather.obsCode`;
+  Open-Meteo's modelled `current.weather_code` is only the fallback (>2 h old / unknown text / outside the US). The
+  model said "Clear" (7 % cloud) while every station reported Cloudy, so don't trust it for the sky
   (**must run with `LD_LIBRARY_PATH=`** inside KOReader). Weather glyphs from KOReader's `nerdfonts/symbols.ttf`.
 - `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details). Swipe = page,
   tap = refresh, long-press = close. Ticks on each minute; weather every 15 min (retried next minute on failure);
