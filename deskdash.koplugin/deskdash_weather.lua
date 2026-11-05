@@ -8,9 +8,9 @@ local json = ok_json and rapidjson or require("json")
 
 local Weather = {}
 
-local function curl(url)
+local function curl(url, headers)
     -- Clear KOReader's LD_LIBRARY_PATH so the system curl uses the system OpenSSL, not KOReader's bundled one.
-    local p = io.popen("LD_LIBRARY_PATH= curl -s -m 20 '" .. url .. "' 2>/tmp/deskdash_curl.err")
+    local p = io.popen("LD_LIBRARY_PATH= curl -s -f -m 20 " .. (headers or "") .. " '" .. url .. "' 2>/tmp/deskdash_curl.err")
     if not p then return nil end
     local body = p:read("*a")
     p:close()
@@ -32,6 +32,8 @@ local SLEET, SNOW, THUNDER = U(0xE316), U(0xE31A), U(0xE31D)
 Weather.ICON = {
     thermometer = U(0xE350), humidity = U(0xE373), wind = U(0xE34B),
     uv = SUN, sunrise = U(0xE34C), sunset = U(0xE34D),
+    umbrella = U(0xE37C), smog = U(0xE36D),
+    warning = U(0xF071), battery_low = U(0xF243), battery_empty = U(0xF244),   -- FontAwesome
 }
 
 local CODES = {
@@ -84,11 +86,13 @@ end
 function Weather.fetch(lat, lon, units)
     local url = string.format(
         "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
-        .. "&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,is_day"
+        .. "&current=temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,weather_code,"
+        .. "wind_speed_10m,wind_direction_10m,wind_gusts_10m,is_day"
+        .. "&minutely_15=precipitation&forecast_minutely_15=8"
         .. "&hourly=temperature_2m,weather_code,precipitation_probability,is_day"
-        .. "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max"
+        .. "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunrise,sunset,uv_index_max"
         .. "&timezone=auto&forecast_days=7&forecast_hours=13%s",
-        lat, lon, units == "imperial" and "&temperature_unit=fahrenheit&wind_speed_unit=mph" or "")
+        lat, lon, units == "imperial" and "&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch" or "")
     local body = curl(url)
     if not body then return nil, "no response" end
     local ok, t = pcall(json.decode, body)
@@ -97,6 +101,54 @@ function Weather.fetch(lat, lon, units)
         return nil, "bad response"
     end
     return t
+end
+
+--- US AQI from Open-Meteo's air-quality API. Returns { aqi, pm2_5 } or nil.
+function Weather.airQuality(lat, lon)
+    local body = curl(string.format(
+        "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=%.4f&longitude=%.4f&current=us_aqi,pm2_5", lat, lon))
+    local ok, t = pcall(json.decode, body or "")
+    if ok and type(t) == "table" and t.current and t.current.us_aqi then
+        return { aqi = t.current.us_aqi, pm2_5 = t.current.pm2_5 }
+    end
+end
+
+function Weather.aqiLevel(aqi)
+    if aqi <= 50 then return "Good" elseif aqi <= 100 then return "Moderate"
+    elseif aqi <= 150 then return "Unhealthy (sensitive)" elseif aqi <= 200 then return "Unhealthy"
+    elseif aqi <= 300 then return "Very Unhealthy" end
+    return "Hazardous"
+end
+
+--- Active US National Weather Service alerts for a point: list of { event, ends = "2026-11-05T18:00:00-05:00" }
+--- (most severe first), {} if none, nil on error (e.g. outside the US).
+local SEVERITY = { Extreme = 1, Severe = 2, Moderate = 3, Minor = 4 }
+function Weather.alerts(lat, lon)
+    local body = curl(string.format("https://api.weather.gov/alerts/active?point=%.4f,%.4f", lat, lon),
+        "-H 'User-Agent: deskdash-kindle' -H 'Accept: application/geo+json'")
+    local ok, t = pcall(json.decode, body or "")
+    if not (ok and type(t) == "table" and type(t.features) == "table") then return nil end
+    local list = {}
+    for _, f in ipairs(t.features) do
+        local p = f.properties or {}
+        if p.event then
+            table.insert(list, { event = p.event, ends = p.ends or p.expires, rank = SEVERITY[p.severity] or 5 })
+        end
+    end
+    table.sort(list, function(a, b) return a.rank < b.rank end)
+    return list
+end
+
+--- Moon phase at a UTC epoch: name, illuminated fraction (0..1), icon.
+local MOON_ICON0 = 0xE38D   -- Weather Icons wi-moon-new .. 27 more phases, in order
+function Weather.moon(t)
+    local f = ((t - 947182440) / 86400 / 29.530588853) % 1   -- 947182440 = new moon 2000-01-06 18:14 UTC
+    local names = { { 0.034, "New Moon" }, { 0.216, "Waxing Crescent" }, { 0.284, "First Quarter" },
+        { 0.466, "Waxing Gibbous" }, { 0.534, "Full Moon" }, { 0.716, "Waning Gibbous" },
+        { 0.784, "Last Quarter" }, { 0.966, "Waning Crescent" }, { 1.01, "New Moon" } }
+    local name
+    for _, n in ipairs(names) do if f < n[1] then name = n[2]; break end end
+    return name, (1 - math.cos(2 * math.pi * f)) / 2, U(MOON_ICON0 + math.floor(f * 28 + 0.5) % 28)
 end
 
 return Weather
