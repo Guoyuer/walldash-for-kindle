@@ -162,6 +162,8 @@ function Dashboard:refreshWeather()
         if ok then   -- extras: keep the previous value if one of these fails
             self.aq = W.airQuality(s.lat, s.lon) or self.aq
             self.alerts = W.alerts(s.lat, s.lon) or self.alerts
+            self.nws = self.nws or {}
+            self.obs = W.observation(s.lat, s.lon, self.nws) or self.obs
         end
     end
     -- On failure, try again at the next minute instead of waiting a full WEATHER_EVERY.
@@ -293,6 +295,18 @@ function Dashboard:header(title)
     }
 end
 
+-- Current conditions: the nearest NWS station's observation if it's recent and understood (models often get the
+-- sky wrong: "Clear" under an overcast sky), else Open-Meteo's modelled weather code.
+local OBS_MAX_AGE = 2 * 3600
+function Dashboard:currentConditions()
+    local c, o = self.data.current, self.obs
+    if o and o.code and os.time() - o.t < OBS_MAX_AGE then
+        local _, icon = Weather.describe(o.code, c.is_day == 1)
+        return o.text, icon
+    end
+    return Weather.describe(c.weather_code, c.is_day == 1)
+end
+
 function Dashboard:pageNow()
     local t, d = self:now(), self.data
     local date = os.date("!%A, %B ", t) .. tonumber(os.date("!%d", t))
@@ -308,11 +322,11 @@ function Dashboard:pageNow()
     }
     if d then
         local c, today = d.current, d.daily
-        local cond, icon = Weather.describe(c.weather_code, c.is_day == 1)
+        local cond, icon = self:currentConditions()
         table.insert(g, HorizontalGroup:new{ align = "center",
             txt(icon, ICONS, 230 - 20 * extra), hspan(90), txt(deg(c.temperature_2m), HEAVY, 260 - 20 * extra) })
         table.insert(g, vspan(24 - 8 * extra))
-        table.insert(g, txt(cond, BOLD, 78))
+        table.insert(g, txt(cond, BOLD, 78, BLACK, self.W - 80))
         table.insert(g, vspan(8))
         table.insert(g, txt("H " .. deg(today.temperature_2m_max[1]) .. "    L " .. deg(today.temperature_2m_min[1]), BOLD, 72))
         local I = Weather.ICON
@@ -340,6 +354,7 @@ function Dashboard:pageHourly()
     for i = 1, math.min(12, #h.time) do
         local t = parseISO(h.time[i])
         local _, icon = Weather.describe(h.weather_code[i], h.is_day and h.is_day[i] == 1)
+        if i == 1 then _, icon = self:currentConditions() end
         local p = h.precipitation_probability and h.precipitation_probability[i]
         local label = (i == 1) and "Now" or self:hhmm(t)
         table.insert(g, HorizontalGroup:new{ align = "center",

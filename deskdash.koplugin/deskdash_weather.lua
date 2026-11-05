@@ -120,14 +120,57 @@ function Weather.aqiLevel(aqi)
     return "Hazardous"
 end
 
+local NWS_HEADERS = "-H 'User-Agent: deskdash-kindle' -H 'Accept: application/geo+json'"
+local function nws(path)
+    local body = curl("https://api.weather.gov" .. path, NWS_HEADERS)
+    local ok, t = pcall(json.decode, body or "")
+    if ok and type(t) == "table" then return t end
+end
+
+--- NWS observation text ("Mostly Cloudy", "Light Rain and Fog/Mist", ...) -> WMO weather code, or nil if unknown.
+function Weather.obsCode(text)
+    local s = (text or ""):lower()
+    if s == "" then return nil end
+    local function has(w) return s:find(w, 1, true) ~= nil end
+    if has("thunder") then return 95 end
+    if has("freezing") or has("sleet") or has("ice pellets") then return 66 end
+    if has("snow") then return has("light") and 71 or (has("heavy") and 75 or 73) end
+    if has("drizzle") then return 53 end
+    if has("rain") or has("shower") then
+        if has("shower") then return 80 end
+        return has("light") and 61 or (has("heavy") and 65 or 63)
+    end
+    if has("fog") or has("mist") or has("haze") or has("smoke") then return 45 end
+    if has("overcast") or has("mostly cloudy") or s == "cloudy" then return 3 end
+    if has("partly") or has("mostly sunny") or has("mostly clear") then return 2 end
+    if has("clear") or has("sunny") or has("fair") then return 0 end
+end
+
+--- Latest observation at the NWS station nearest to lat/lon (US only): { text, code, t = UTC epoch } or nil.
+--- cache (a table kept by the caller) remembers the station so later calls need one request.
+function Weather.observation(lat, lon, cache)
+    if not cache.station then
+        local pt = nws(string.format("/points/%.4f,%.4f", lat, lon))
+        local url = pt and pt.properties and pt.properties.observationStations
+        local st = url and nws(url:gsub("^https://api.weather.gov", "") .. "?limit=1")
+        local f = st and st.features and st.features[1]
+        cache.station = f and f.properties and f.properties.stationIdentifier
+        if not cache.station then return nil end
+    end
+    local o = nws("/stations/" .. cache.station .. "/observations/latest")
+    local p = o and o.properties
+    if not (p and p.textDescription and p.textDescription ~= "" and p.timestamp) then return nil end
+    -- timestamp is UTC ("2026-11-05T19:51:00+00:00"), so parseISO gives the real epoch
+    return { text = p.textDescription, code = Weather.obsCode(p.textDescription),
+             t = Weather.parseISO(p.timestamp:sub(1, 16)), station = cache.station }
+end
+
 --- Active US National Weather Service alerts for a point: list of { event, ends = "2026-11-05T18:00:00-05:00" }
 --- (most severe first), {} if none, nil on error (e.g. outside the US).
 local SEVERITY = { Extreme = 1, Severe = 2, Moderate = 3, Minor = 4 }
 function Weather.alerts(lat, lon)
-    local body = curl(string.format("https://api.weather.gov/alerts/active?point=%.4f,%.4f", lat, lon),
-        "-H 'User-Agent: deskdash-kindle' -H 'Accept: application/geo+json'")
-    local ok, t = pcall(json.decode, body or "")
-    if not (ok and type(t) == "table" and type(t.features) == "table") then return nil end
+    local t = nws(string.format("/alerts/active?point=%.4f,%.4f", lat, lon))
+    if not (t and type(t.features) == "table") then return nil end
     local list = {}
     for _, f in ipairs(t.features) do
         local p = f.properties or {}
