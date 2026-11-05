@@ -47,6 +47,7 @@ local BAT = "/sys/class/power_supply/bd71827_bat/"
 -- Night (local hours [from, to)): wake only every `step` minutes and don't fetch the weather.
 local NIGHT = { from = 2, to = 5, step = 10 }
 local RTC = "/dev/rtc1"          -- the wake-capable RTC on the PW4 (snvs)
+local ROTATION_FILE = "/tmp/deskdash_rotation"
 
 -- Font:getFace() scales sizes by DPI; we think in screen pixels.
 local SCALE = Screen:scaleBySize(1000) / 1000
@@ -96,15 +97,39 @@ function Dashboard:init()
     self._tick = function() self:onTick() end
     self._poll = function() self:pollCommand() end
     self._sleep = function() self:sleepUntilNextMinute() end
+    self._ready = function() self:reportReady() end
+    self._initial_fetch = function()
+        self:refreshWeather()
+        self:logPower("start")   -- the first fetch supplies the local time
+        self:redraw("ui")
+    end
+    self.next_fetch_at = math.huge
     self:keepAwake(true)
     self:resetPowerStats()
     self.pw.ac = self:onExternalPower()
-    self:refreshWeather()
-    self:logPower("start")   -- after the first fetch, so the row has the local time
     self:rebuild()
     self:scheduleTick()
+end
+
+function Dashboard:writeRotation()
+    local file = io.open(ROTATION_FILE, "w")
+    if file then
+        file:write(Screen:getRotationMode(), "\n")
+        file:close()
+    end
+end
+
+function Dashboard:onShow()
+    UIManager:nextTick(self._ready)
+end
+
+function Dashboard:reportReady()
+    self:writeRotation()
+    UIManager:forceRePaint()
+    UIManager:waitForVSync()
+    logger.info("deskdash: dashboard up")   -- deploy verifies the painted screen independently of weather
+    UIManager:scheduleIn(1, self._initial_fetch)
     UIManager:scheduleIn(1, self._poll)
-    logger.info("deskdash: dashboard up")   -- tools/kindle_deploy.sh waits for this
 end
 
 -- Debug/remote control: write one of next|prev|refresh|close|quit|restart|sleep|demo|demo off|page N to this file.
@@ -112,26 +137,50 @@ end
 -- ("sleep" forces one battery-mode sleep even when plugged in; "restart" reloads KOReader + plugin quickly.)
 -- (KOReader grabs the touchscreen, so injected touches can't reach it.)
 local CMD_FILE = "/tmp/deskdash_cmd"
+local ACK_FILE = "/tmp/deskdash_ack"
+
+function Dashboard:ackCommand(id, ok)
+    UIManager:forceRePaint()
+    UIManager:waitForVSync()
+    local file = io.open(ACK_FILE .. ".new", "w")
+    if file then
+        file:write(id, " ", ok and "ok" or "error", "\n")
+        file:close()
+        os.rename(ACK_FILE .. ".new", ACK_FILE)
+    end
+end
+
 function Dashboard:pollCommand()
     local f = io.open(CMD_FILE, "r")
     if f then
         local cmd = (f:read("*a") or ""):gsub("%s+$", "")
         f:close()
         os.remove(CMD_FILE)
+        local id, request = cmd:match("^@(%x+) (.+)$")
+        if id then
+            cmd = request
+            self.last_touch = os.time()
+        end
+        local handled = true
         logger.info("deskdash: command", cmd)
         if cmd == "sleep" then self.last_touch = 0; self.force_sleep = true; UIManager:nextTick(self._sleep)
         elseif cmd == "demo" or cmd == "demo off" then self.demo = (cmd == "demo"); self:redraw("full")
         elseif cmd == "next" then self:onSwipe(nil, { direction = "west" })
         elseif cmd == "prev" then self:onSwipe(nil, { direction = "east" })
         elseif cmd == "refresh" then self:onTap()
-        elseif cmd == "close" then self:onClose(); return
+        elseif cmd == "close" then
+            self:onClose()
+            if id then self:ackCommand(id, true) end
+            return
         elseif cmd == "quit" or cmd == "restart" then
             -- quit: clean exit (menu > Exit), koreader.sh restores the Kindle UI (slow).
             -- restart: exit code 85, koreader.sh just relaunches KOReader (fast; used by deploy).
             self:onClose()
             if cmd == "quit" then UIManager:quit() else UIManager:restartKOReader() end
             return
-        elseif cmd:match("^page %d$") then self.page = tonumber(cmd:sub(6)); self:redraw("partial") end
+        elseif cmd:match("^page [1-4]$") then self.page = tonumber(cmd:sub(6)); self:redraw("partial")
+        else handled = false end
+        if id then self:ackCommand(id, handled and self.page_ok) end
     end
     UIManager:scheduleIn(1, self._poll)
 end
@@ -527,6 +576,7 @@ end
 function Dashboard:rebuild()
     local builders = { self.pageNow, self.pageHourly, self.pageDaily, self.pageDetails }
     local ok, content = pcall(builders[self.page], self)
+    self.page_ok = ok
     if not ok then
         logger.err("deskdash: page build failed", content)
         content = VerticalGroup:new{ align = "center", vspan(500), txt("Something went wrong", BOLD, 56),
@@ -641,9 +691,6 @@ end
 
 function Dashboard:onClose()
     self:logPower("close")
-    UIManager:unschedule(self._tick)
-    UIManager:unschedule(self._poll)
-    UIManager:unschedule(self._sleep)
     self:restore()
     self:keepAwake(false)
     UIManager:close(self, "full")
@@ -654,6 +701,9 @@ function Dashboard:onCloseWidget()
     UIManager:unschedule(self._tick)
     UIManager:unschedule(self._poll)
     UIManager:unschedule(self._sleep)
+    UIManager:unschedule(self._ready)
+    UIManager:unschedule(self._initial_fetch)
+    os.remove(ROTATION_FILE)
 end
 
 return Dashboard

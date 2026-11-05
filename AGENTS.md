@@ -28,7 +28,8 @@ sh tools/check.sh                       # < 1 s, no Kindle: compile all plugin f
 sh tools/deploy_dash.sh [--shots]       # ~12 s: check -> upload -> restart -> verify -> auto-rollback -> screenshot
 python tools/kctl.py run "cmd"          # ssh
 python tools/kctl.py shot [out.png]     # screenshot (~2.5 s) -> tools/inbox/shot.png (needs Pillow)
-python tools/kctl.py dash next|prev|refresh|close|quit|restart|sleep|demo|"demo off"|"page N" [out.png]
+python tools/kctl.py dash next|prev|refresh|close|demo|"page N" [out.png]
+python tools/kctl.py command quit|restart|sleep|"demo off"
 python tools/kctl.py push file ...      # repo-relative -> same path under /mnt/us
 ```
 
@@ -41,13 +42,15 @@ Dev loop: edit -> `sh tools/deploy_dash.sh` -> look at `tools/inbox/dash.png` (`
 - **Deploy** (`deploy_dash.sh` + device-side `kindle_deploy.sh`): one ssh session (tar of plugin + script over stdin).
   The new build goes to `plugins/deskdash.koplugin`, the old one to `.koplugin.bak`; `deskdash_version.lua`
   (`git describe --dirty`) is written into it and logged as `deskdash: loaded version …`. It waits for
-  `deskdash: dashboard up` and fails on Lua errors in crash.log (`page build failed`, `attempt to`, `file.lua:N:`),
+  `deskdash: dashboard up` after the first paint and before the weather request. It fails on Lua errors in
+  crash.log (`page build failed`, `attempt to`, `file.lua:N:`),
   then **rolls back** to `.bak` (failed build kept as `.koplugin.failed`; KOReader only loads dirs ending in `.koplugin`).
 - Restart: the plugin's `restart` command (exit code 85: `koreader.sh` relaunches only KOReader, a few seconds). If the
   plugin isn't running (main.lua failed to load) it falls back to SIGTERM and **waits for `koreader.sh` to finish**
   (restores the stock UI, can take >3 min) before launching. Never kill KOReader and relaunch immediately: two
   instances fight over the stock UI ("startup script updated" dialog, stuck Home screen; needed a reboot once).
 - Plugin commands go through `/tmp/deskdash_cmd` (polled every second) because KOReader EVIOCGRABs the touchscreen.
+  `kctl dash` waits for a matching repaint acknowledgment before reading the framebuffer. Keep commands serial.
 - Screenshots: `/dev/fb0` holds several frames (6.8 MB, 23 s over Wi-Fi); `kctl` reads only the visible one, gzipped (~35 KB).
 - Remote: private GitHub repo `Guoyuer/kindle-mod` (push after committing). No cloud CI: deploying needs the LAN.
 - Launch KOReader: `setsid /var/local/kmc/bin/kpm launch koreader --asap`. Logs: `/mnt/us/koreader/crash.log`.

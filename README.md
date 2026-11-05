@@ -38,7 +38,8 @@ Host kindle
 ```bash
 ssh kindle
 python tools/kctl.py shot             # 截图到 tools/inbox/shot.png
-python tools/kctl.py dash next        # 给插件发命令：next | prev | refresh | close | quit | restart | sleep | demo | page N
+python tools/kctl.py dash next        # 翻页，等绘制完成再截图
+python tools/kctl.py command restart  # 给插件发命令，不截图
 python tools/kctl.py push kdev/sshd.sh
 sh tools/check.sh                     # 本地检查 + 单元测试（<1 秒，需要 LuaJIT：winget install DEVCOM.LuaJIT）
 sh tools/deploy_dash.sh               # 检查 → 推送 → 重启 → 验证（失败自动回滚）→ 截图，约 12 秒；--shots 截全部页面
