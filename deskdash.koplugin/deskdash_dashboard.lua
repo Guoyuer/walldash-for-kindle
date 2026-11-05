@@ -141,6 +141,7 @@ function Dashboard:refreshWeather()
             self.offset = loc.offset
         end
     end
+    self:setWifi(true)
     self:waitForWifi()
     local ok = false
     if s.lat and s.lon then
@@ -151,11 +152,28 @@ function Dashboard:refreshWeather()
     self.fetched_at = ok and os.time() or (os.time() - WEATHER_EVERY + 60)
 end
 
--- After a suspend the Wi-Fi needs a few seconds to reassociate; wait for it (up to 20 s).
+-- Battery mode switches Wi-Fi off between weather fetches (it otherwise reassociates at every minute wake).
+-- Only Wi-Fi we switched off ourselves is switched back on.
+function Dashboard:setWifi(on)
+    if not Device:isKindle() then return end
+    if on and self.wifi_off then
+        self.wifi_off = nil
+        os.execute("lipc-set-prop com.lab126.cmd wirelessEnable 1")
+    elseif not on and not self.wifi_off then
+        local p = io.popen("lipc-get-prop com.lab126.cmd wirelessEnable 2>/dev/null")
+        local v = p and p:read("*l"); if p then p:close() end
+        if v == "1" then
+            self.wifi_off = true
+            os.execute("lipc-set-prop com.lab126.cmd wirelessEnable 0")
+        end
+    end
+end
+
+-- Wi-Fi needs ~2 s to reassociate after a suspend, ~10 s after being switched on; wait for it (up to 30 s).
 function Dashboard:waitForWifi()
     if not Device:isKindle() then return end
     local t0 = os.time()
-    while os.time() - t0 < 20 do
+    while os.time() - t0 < 30 do
         local p = io.popen("lipc-get-prop com.lab126.wifid cmState 2>/dev/null")
         local state = p and p:read("*l"); if p then p:close() end
         if state == "CONNECTED" then
@@ -164,7 +182,7 @@ function Dashboard:waitForWifi()
         end
         os.execute("sleep 1")
     end
-    logger.warn("deskdash: wifi not connected after 20 s")
+    logger.warn("deskdash: wifi not connected after 30 s")
 end
 
 local function readFile(path)
@@ -397,7 +415,7 @@ function Dashboard:onTick()
     if self:canSleep() then
         UIManager:nextTick(self._sleep)
     else
-        self:restoreLight()   -- staying awake (e.g. charger plugged in): undo the battery-mode light-off
+        self:restore()   -- staying awake (e.g. charger plugged in): undo the battery-mode light/Wi-Fi off
     end
 end
 
@@ -419,7 +437,8 @@ function Dashboard:sleepUntilNextMinute()
     UIManager:forceRePaint()
     UIManager:waitForVSync()
     -- The frontlight comes back on at every resume, so switch it off while in battery mode;
-    -- it's turned back on only for a power-button wake.
+    -- it (and Wi-Fi) are turned back on only when staying awake (power button, charger).
+    self:setWifi(false)
     local powerd = Device:hasFrontlight() and Device.powerd
     if powerd and powerd:isFrontlightOn() then
         powerd:turnOffFrontlight()
@@ -430,7 +449,7 @@ function Dashboard:sleepUntilNextMinute()
     if early > 2 then
         -- woken before the alarm: power button (or suspend refused) -> stay interactive for a while
         logger.info("deskdash: woke", early, "s early")
-        self:restoreLight()
+        self:restore()
         self.last_touch = os.time()
         self:scheduleTick()
     else
@@ -438,11 +457,12 @@ function Dashboard:sleepUntilNextMinute()
     end
 end
 
-function Dashboard:restoreLight()
+function Dashboard:restore()
     if self.light_off then
         self.light_off = nil
         Device.powerd:turnOnFrontlight()
     end
+    self:setWifi(true)
 end
 
 function Dashboard:onSwipe(_, ges)
@@ -471,7 +491,7 @@ function Dashboard:onClose()
     UIManager:unschedule(self._tick)
     UIManager:unschedule(self._poll)
     UIManager:unschedule(self._sleep)
-    self:restoreLight()
+    self:restore()
     self:keepAwake(false)
     UIManager:close(self, "full")
     return true
