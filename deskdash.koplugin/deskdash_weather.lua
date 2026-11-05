@@ -83,7 +83,7 @@ function Weather.locate()
 end
 
 local HOURLY = { "temperature_2m", "weather_code", "precipitation_probability", "is_day" }
-local DAILY = { "weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_probability_max", "precipitation_sum" }
+local DAILY = { "weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_sum" }
 local DEFAULT_MODEL, NBM = "_best_match", "_ncep_nbm_conus"
 
 local function forecastSection(section, fields, suffix)

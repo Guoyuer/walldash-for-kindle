@@ -41,7 +41,7 @@ local function forecastFixture(default_suffix, missing_nbm)
         h[field .. default_suffix] = { 1, 2, 3, 4 }
         if default_suffix ~= "" then h[field .. "_ncep_nbm_conus"] = { 0, 12, 13, 14 } end
     end
-    for _, field in ipairs{ "weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_probability_max", "precipitation_sum" } do
+    for _, field in ipairs{ "weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_sum" } do
         d[field .. default_suffix] = { 2 }
         if default_suffix ~= "" then d[field .. "_ncep_nbm_conus"] = { 20 } end
     end

@@ -284,13 +284,13 @@ function Dashboard:dots()
     return g
 end
 
-function Dashboard:header(title, note)
+function Dashboard:header(title)
     local s = self.settings
     return VerticalGroup:new{ align = "center",
         vspan(70),
         txt(title, BOLD, 46, BLACK),
         vspan(8),
-        txt((s.city or "") .. "  ·  " .. self:hhmm(self:now()) .. (note and "  ·  " .. note or ""), SANS, 34, GRAY, self.W - 80),
+        txt((s.city or "") .. "  ·  " .. self:hhmm(self:now()), SANS, 34, GRAY, self.W - 80),
         vspan(40),
     }
 end
@@ -309,7 +309,7 @@ end
 
 function Dashboard:pageNow()
     local t, d = self:now(), self.data
-    local date = os.date("!%A, %B ", t) .. tonumber(os.date("!%d", t))
+    local date = os.date("!%A, %b ", t) .. tonumber(os.date("!%d", t))
     local function fmt(at) return self:hhmm(at) end
     local alert = Weather.activeAlert(self.alerts, t, fmt)
     local precip = d and Weather.precipSummary(d.hourly, t, fmt)
@@ -394,7 +394,7 @@ function Dashboard:rangeBar(w, lo, hi, min_all, max_all, now_t)
 end
 
 function Dashboard:pageDaily()
-    local g = self:header("7-DAY FORECAST", "Peak hourly precip %")
+    local g = self:header("7-DAY FORECAST")
     local d = self.data and self.data.daily
     if not d then table.insert(g, txt("No data", SANS, 48, GRAY)); return g end
     local n = math.min(7, #d.time)
@@ -405,12 +405,10 @@ function Dashboard:pageDaily()
     local rowW, rowH = self.W - 120, 132
     for i = 1, n do
         local _, icon = Weather.describe(d.weather_code[i], true)
-        local p = d.precipitation_probability_max and d.precipitation_probability_max[i]
         local day = (i == 1) and "Today" or os.date("!%a", parseISO(d.time[i]))
         table.insert(g, HorizontalGroup:new{ align = "center",
             box(170, rowH, txt(day, i == 1 and BOLD or SANS, 50), "left"),
-            box(110, rowH, VerticalGroup:new{ align = "center", txt(icon, ICONS, 60),
-                txt((p and p >= 20) and (p .. "%") or " ", SANS, 28, GRAY) }),
+            box(110, rowH, txt(icon, ICONS, 60)),
             box(120, rowH, txt(deg(d.temperature_2m_min[i]), SANS, 48, GRAY), "right"),
             hspan(28),
             box(rowW - 170 - 110 - 120 - 28 - 28 - 120, rowH,
