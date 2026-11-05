@@ -43,7 +43,7 @@ def dashboard_command(cmd):
     token = uuid.uuid4().hex
     request = shlex.quote(f"@{token} {cmd}")
     staging = f"/tmp/deskdash_cmd.{token}"
-    attempts = 1800 if cmd == "refresh" else 200
+    attempts = 1800 if cmd in ("refresh", "weather ready") else 200
     remote = (
         f"printf '%s\\n' {request} > {staging} && mv {staging} /tmp/deskdash_cmd || exit 1; "
         f'i=0; while [ "$i" -lt {attempts} ]; do '
