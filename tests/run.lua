@@ -16,13 +16,14 @@ local function eq(name, got, want)
 end
 local hm = function(t) return os.date("!%H:%M", t) end
 
--- parseISO: "local" epochs that format back to the same wall-clock time
-eq("parseISO time", hm(W.parseISO("2026-11-05T13:00")), "13:00")
-eq("parseISO date-only = noon", hm(W.parseISO("2026-11-05")), "12:00")
-eq("parseISO leap day", os.date("!%Y-%m-%d", W.parseISO("2028-02-29T10:00")), "2028-02-29")
-eq("parseISO epoch", W.parseISO("1970-01-01T00:00"), 0)
-eq("parseISO DST day", os.date("!%Y-%m-%d %H:%M", W.parseISO("2026-03-08T03:30")), "2026-03-08 03:30")
-eq("parseISO alert with offset", hm(W.parseISO(("2026-11-05T18:00:00-05:00"):sub(1, 16))), "18:00")
+-- parseWallTime: "local" epochs that format back to the same wall-clock time
+eq("parseWallTime time", hm(W.parseWallTime("2026-11-05T13:00")), "13:00")
+eq("parseWallTime date-only = noon", hm(W.parseWallTime("2026-11-05")), "12:00")
+eq("parseWallTime leap day", os.date("!%Y-%m-%d", W.parseWallTime("2028-02-29T10:00")), "2028-02-29")
+eq("parseWallTime epoch", W.parseWallTime("1970-01-01T00:00"), 0)
+eq("parseWallTime DST day", os.date("!%Y-%m-%d %H:%M", W.parseWallTime("2026-03-08T03:30")), "2026-03-08 03:30")
+eq("parseWallTime alert with offset", hm(W.parseWallTime(("2026-11-05T18:00:00-05:00"):sub(1, 16))), "18:00")
+eq("malformed wall time", W.parseWallTime("unknown"), nil)
 
 local hourly = {
     time = { "2026-11-05T15:00", "2026-11-05T16:00", "2026-11-05T17:00", "2026-11-05T18:00" },
@@ -31,9 +32,9 @@ local hourly = {
 eq("hourly probability uses interval end", W.hourlyPrecipChance(hourly, 2), 70)
 eq("low probability rounds to five", W.hourlyPrecipChance(hourly, 1), 5)
 eq("small probability rounds to zero", W.hourlyPrecipChance(hourly, 3), 0)
-eq("summary agrees with hourly row", W.precipSummary(hourly, W.parseISO("2026-11-05T15:30"), hm), "16:00–17:00 · 70% precip")
-eq("current interval remains eligible", W.precipSummary(hourly, W.parseISO("2026-11-05T16:15"), hm), "16:00–17:00 · 70% precip")
-eq("expired interval ignored", W.precipSummary(hourly, W.parseISO("2026-11-05T17:00"), hm), nil)
+eq("summary agrees with hourly row", W.precipSummary(hourly, W.parseWallTime("2026-11-05T15:30"), hm), "16:00–17:00 · 70% precip")
+eq("current interval remains eligible", W.precipSummary(hourly, W.parseWallTime("2026-11-05T16:15"), hm), "16:00–17:00 · 70% precip")
+eq("expired interval ignored", W.precipSummary(hourly, W.parseWallTime("2026-11-05T17:00"), hm), nil)
 eq("missing hourly forecast", W.precipSummary(nil, 0, hm), nil)
 
 local function forecastFixture(default_suffix, missing_nbm)
@@ -63,8 +64,28 @@ local outside = W.selectForecast(forecastFixture(""))
 eq("unsuffixed hourly outside coverage", outside.hourly.temperature_2m[1], 1)
 eq("unsuffixed daily outside coverage", outside.daily.temperature_2m_max[1], 2)
 
+local partial = forecastFixture("")
+partial.current = { temperature_2m = 0, apparent_temperature = {} }
+partial.daily.sunrise = { "2026-11-05T06:30" }
+partial.daily.sunset = { {} }
+local selected = W.selectForecast(partial)
+eq("current zero survives normalization", selected.current.temperature_2m, 0)
+eq("invalid feels-like is absent", selected.current.apparent_temperature, nil)
+eq("sunrise is parsed", hm(selected.daily.sunrise[1]), "06:30")
+eq("invalid sunset is absent", selected.daily.sunset[1], nil)
+eq("missing sunrise series is safe", outside.daily.sunrise[1], nil)
+
+local daily = { time = { "2026-11-05", "2026-11-06" } }
+local day_index, is_today = W.firstForecastDay(daily, W.parseWallTime("2026-11-06T00:01"))
+eq("yesterday is skipped after midnight", day_index, 2)
+eq("cached second day becomes today", is_today, true)
+day_index, is_today = W.firstForecastDay(daily, W.parseWallTime("2026-11-04T23:59"))
+eq("future-only forecast starts at first date", day_index, 1)
+eq("a future date is not today", is_today, false)
+eq("expired daily forecast", W.firstForecastDay(daily, W.parseWallTime("2026-11-07T00:00")), nil)
+
 -- activeAlert
-local now = W.parseISO("2026-11-05T15:00")
+local now = W.parseWallTime("2026-11-05T15:00")
 eq("no alerts", W.activeAlert(nil, now, hm), nil)
 eq("active alert", W.activeAlert({ { event = "Wind Advisory", ends = "2026-11-05T18:00:00-05:00" } }, now, hm), "Wind Advisory until 18:00")
 eq("expired alert skipped", W.activeAlert({ { event = "Old", ends = "2026-11-05T14:00:00-05:00" },
@@ -80,7 +101,7 @@ eq("moon icon is 3 bytes", #select(3, W.moon(os.time())), 3)
 
 -- night schedule (2:00-5:00, every 10 min)
 local N = { from = 2, to = 5, step = 10 }
-local at = function(hhmmss) return W.parseISO("2026-11-05T" .. hhmmss:sub(1, 5)) + tonumber(hhmmss:sub(7, 8)) end
+local at = function(hhmmss) return W.parseWallTime("2026-11-05T" .. hhmmss:sub(1, 5)) + tonumber(hhmmss:sub(7, 8)) end
 eq("day: next minute", W.secondsToNextWake(at("13:20:15"), N), 45)
 eq("01:59 -> 02:00", W.secondsToNextWake(at("01:59:30"), N), 30)
 eq("02:00 -> 02:10", W.secondsToNextWake(at("02:00:01"), N), 599)

@@ -35,13 +35,18 @@ verify() {
 }
 
 rm -rf $P.new && cp -r /tmp/dd/deskdash.koplugin $P.new || exit 1
-echo "return \"$V\"" > $P.new/deskdash_version.lua
-rm -rf $P.bak; [ -d $P ] && mv $P $P.bak; mv $P.new $P
-restart || exit 1
-if verify "$V"; then echo "deployed $V"; exit 0; fi
+echo "return \"$V\"" > $P.new/deskdash_version.lua || exit 1
+rm -rf $P.bak || exit 1
+if [ -d $P ]; then mv $P $P.bak || exit 1; fi
+if mv $P.new $P; then
+  if restart && verify "$V"; then echo "deployed $V"; exit 0; fi
+  echo "*** $V failed"
+  rm -rf $P.failed && mv $P $P.failed || exit 1
+fi
 
-echo "*** $V failed - rolling back"
+if [ ! -d $P.bak ]; then echo "no previous version to restore"; exit 1; fi
+echo "rolling back"
 PREV=$(sed -n 's/^return "\(.*\)"$/\1/p' $P.bak/deskdash_version.lua 2>/dev/null)
-rm -rf $P.failed; mv $P $P.failed; mv $P.bak $P
+mv $P.bak $P || exit 1
 restart && verify "${PREV:-dev}" && echo "rolled back to ${PREV:-previous version} (failed build kept in $P.failed)"
 exit 1

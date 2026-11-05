@@ -36,7 +36,7 @@ Dev loop: edit -> `sh tools/deploy_dash.sh` -> look at `tools/inbox/dash.png` (`
 
 - **Local checks** (`tools/check.sh`) need LuaJIT on the PC (`winget install DEVCOM.LuaJIT`, same 2.1 as the device).
   `luajit -bl` bytecode listings are scanned for GGET/GSET of names outside an allow-list, which catches a
-  missing `local` / typo'd upvalue. Pure logic (parseISO, precipSummary, activeAlert, moon, levels) lives in
+  missing `local` / typo'd upvalue. Pure logic (parseWallTime, precipSummary, activeAlert, moon, levels) lives in
   `deskdash_weather.lua` so `tests/run.lua` can test it without KOReader's UI (it stubs logger/json off-device).
 - **Deploy** (`deploy_dash.sh` + device-side `kindle_deploy.sh`): one ssh session (tar of plugin + script over stdin).
   The new build goes to `plugins/deskdash.koplugin`, the old one to `.koplugin.bak`; `deskdash_version.lua`
@@ -76,7 +76,8 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   flashing full refresh every 30 min; back to page 1 after 2 min idle. Page 1 has no city name (user's choice); it shows
   an alert line and a precipitation line when there is one. On battery at <= 20 % a "Charge me" badge appears bottom-left.
   Details = 8 tiles (feels like, humidity, wind, UV, precipitation, AQI, next sun event, moon).
-  - Times: Kindle clock is UTC; `now()` adds the API's `utc_offset_seconds`; always format with `os.date("!...")`.
+  - Times: Kindle clock is UTC. `localNow()` adds the API's UTC offset to match `parseWallTime`'s offset-free
+    forecast timestamps. Format those values with `os.date("!...")` and use `os.time()` for elapsed time.
   - Layout gotcha: `FrameContainer:getSize()` ignores width/height → use the `fixed(w, h)` child helper.
   - Low-contrast e-ink: secondary text is 0x33 gray, not lighter. Fonts: NotoSans Regular/Bold (KOReader can't see Amazon Ember).
 
