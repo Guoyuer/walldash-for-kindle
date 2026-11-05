@@ -367,7 +367,7 @@ function Dashboard:pageHourly()
         table.insert(g, HorizontalGroup:new{ align = "center",
             box(260, rowH, txt(label, is_now and BOLD or SANS, 50), "left"),
             box(170, rowH, txt(icon, ICONS, 64)),
-            box(200, rowH, txt((p and p >= 10) and (p .. "%") or "", SANS, 40, GRAY), "right"),
+            box(200, rowH, txt(p .. "%", SANS, 40, GRAY), "right"),
             box(rowW - 630, rowH, txt(deg(temperature), BOLD, 54), "right"),
         })
         if i < last then table.insert(g, LineWidget:new{ dimen = Geom:new{ w = rowW, h = 2 }, background = LIGHT }) end

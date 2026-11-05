@@ -237,7 +237,8 @@ local parseISO = Weather.parseISO
 
 -- Open-Meteo timestamps the probability at the end of the interval; the hourly row is labelled by its start.
 function Weather.hourlyPrecipChance(h, i)
-    return h.precipitation_probability[i + 1]
+    local chance = h.precipitation_probability[i + 1]
+    return math.floor(chance / 5 + 0.5) * 5
 end
 
 function Weather.firstForecastHour(h, now)

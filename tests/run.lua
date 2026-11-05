@@ -26,9 +26,11 @@ eq("parseISO alert with offset", hm(W.parseISO(("2026-11-05T18:00:00-05:00"):sub
 
 local hourly = {
     time = { "2026-11-05T15:00", "2026-11-05T16:00", "2026-11-05T17:00", "2026-11-05T18:00" },
-    precipitation_probability = { 90, 10, 70, 0 },
+    precipitation_probability = { 90, 6, 69, 1 },
 }
 eq("hourly probability uses interval end", W.hourlyPrecipChance(hourly, 2), 70)
+eq("low probability rounds to five", W.hourlyPrecipChance(hourly, 1), 5)
+eq("small probability rounds to zero", W.hourlyPrecipChance(hourly, 3), 0)
 eq("summary agrees with hourly row", W.precipSummary(hourly, W.parseISO("2026-11-05T15:30"), hm), "16:00–17:00 · 70% precip")
 eq("current interval remains eligible", W.precipSummary(hourly, W.parseISO("2026-11-05T16:15"), hm), "16:00–17:00 · 70% precip")
 eq("expired interval ignored", W.precipSummary(hourly, W.parseISO("2026-11-05T17:00"), hm), nil)
