@@ -24,6 +24,7 @@ local logger = require("logger")
 local time = require("ui/time")
 local Weather = require("deskdash_weather")
 local Bench = require("deskdash_benchmark")
+local WeatherJob = require("deskdash_weather_job")
 local Chinese = require("deskdash_chinese")
 local parseWallTime = Weather.parseWallTime
 local Screen = Device.screen
@@ -112,11 +113,8 @@ function Dashboard:init()
     self._poll = function() self:pollCommand() end
     self._sleep = function() self:sleepUntilNextMinute() end
     self._ready = function() self:reportReady() end
-    self._initial_fetch = function()
-        self:refreshWeather()
-        self:logPower("start")   -- the first fetch supplies the local time
-        self:redraw("ui")
-    end
+    self._initial_fetch = function() self:refreshWeather() end
+    self._check_weather = function() self:checkWeather() end
     self.next_fetch_at = math.huge
     self:keepAwake(true)
     self:resetPowerStats()
@@ -153,18 +151,22 @@ end
 local CMD_FILE = "/tmp/deskdash_cmd"
 local ACK_FILE = "/tmp/deskdash_ack"
 
-function Dashboard:ackCommand(id, ok, sample)
-    UIManager:forceRePaint()
-    Bench.mark(sample, "submit")
-    UIManager:waitForVSync()
-    Bench.mark(sample, "epdc_wait")
-    Bench.finish(sample)
+local function writeCommandAck(id, ok)
     local file = io.open(ACK_FILE .. ".new", "w")
     if file then
         file:write(id, " ", ok and "ok" or "error", "\n")
         file:close()
         os.rename(ACK_FILE .. ".new", ACK_FILE)
     end
+end
+
+function Dashboard:ackCommand(id, ok, sample)
+    UIManager:forceRePaint()
+    Bench.mark(sample, "submit")
+    UIManager:waitForVSync()
+    Bench.mark(sample, "epdc_wait")
+    Bench.finish(sample)
+    writeCommandAck(id, ok)
 end
 
 function Dashboard:pollCommand()
@@ -180,7 +182,7 @@ function Dashboard:pollCommand()
         end
         local handled = true
         local kind = cmd == "refresh" and "refresh_input" or "command"
-        local sample = Bench.start(id and self.benchmark, kind)
+        local sample = Bench.start(self.benchmark and (id or cmd == "refresh"), kind)
         logger.info("deskdash: command", cmd)
         if cmd == "bench on" or cmd == "bench off" then self.benchmark = cmd == "bench on"
         elseif cmd == "sleep" then
@@ -210,7 +212,14 @@ function Dashboard:pollCommand()
             if handled then self:onTap(nil, { pos = { x = tonumber(x), y = tonumber(y) } }) end
         end
         Bench.mark(sample, "dispatch")
-        if id then self:ackCommand(id, handled and self.page_ok, sample) end
+        if id and cmd == "refresh" and self.weather_job then
+            self.weather_job.ack = id
+            Bench.finish(sample)
+        elseif id then
+            self:ackCommand(id, handled and self.page_ok, sample)
+        else
+            Bench.finish(sample)
+        end
     end
     UIManager:scheduleIn(1, self._poll)
 end
@@ -223,49 +232,66 @@ end
 
 -- ---------------------------------------------------------------- data
 
-function Dashboard:refreshWeather()
-    local W, s = Weather, self.settings
-    local started_at = os.time()
-    self.next_fetch_at = started_at + 60  -- retry on the next eligible minute tick if this fetch fails
+function Dashboard:refreshWeather(manual)
+    if self.weather_job then return end
+    local job = { initial = self.next_fetch_at == math.huge, manual = manual }
     self.pw.fetches = self.pw.fetches + 1
-    local sample = Bench.start(self.benchmark, "weather")
     self:setWifi(true)
-    local connected = self:waitForWifi()
-    Bench.mark(sample, "wifi")
-    if not connected then
-        self.pw.fails = self.pw.fails + 1
-        Bench.finish(sample)
+    local pid, err = WeatherJob.start(self.settings, self.offset, self.station, Device:isKindle(), self.benchmark)
+    if not pid then
+        logger.warn("deskdash: weather worker failed to start", err)
+        self:finishWeather(job)
         return
     end
-    Bench.mark(sample, "locate")
-    if not (s.lat and s.lon) or not self.offset then
-        local loc = W.locate()
+    job.pid = pid
+    self.weather_job = job
+    UIManager:scheduleIn(0.25, self._check_weather)
+end
+
+function Dashboard:finishWeather(job, result)
+    if result then
+        self.pw.wifi = self.pw.wifi + result.wifi_s
+        local loc, s = result.location, self.settings
         if loc then
             s.lat, s.lon, s.city = s.lat or loc.lat, s.lon or loc.lon, s.city or loc.city
             self.offset = loc.offset
         end
+        self.data = result.data or self.data
+        self.alerts = result.alerts or self.alerts
+        self.aq = result.aq or self.aq
+        self.obs = result.obs or self.obs
+        self.station = result.station or self.station
     end
-    local ok = false
-    if s.lat and s.lon then
-        local data, err = W.fetch(s.lat, s.lon, s.units)
-        Bench.mark(sample, "forecast")
-        if data then self.data = data; ok = true else logger.warn("deskdash: fetch failed", err) end
-        self.alerts = W.alerts(s.lat, s.lon) or self.alerts
-        Bench.mark(sample, "alerts")
-        if ok then
-            self.aq = W.airQuality(s.lat, s.lon) or self.aq
-            Bench.mark(sample, "aqi")
-            self.nws = self.nws or {}
-            self.obs = W.observation(s.lat, s.lon, self.nws) or self.obs
-            Bench.mark(sample, "observation")
-        end
-    end
-    if ok then
-        self.next_fetch_at = os.time() + WEATHER_EVERY
+    if result and result.data then
+        self.weather_retry = nil
     else
         self.pw.fails = self.pw.fails + 1
+        self.weather_retry = math.min((self.weather_retry or 30) * 2, WEATHER_EVERY)
     end
-    Bench.finish(sample)
+    self.next_fetch_at = os.time() + (self.weather_retry or WEATHER_EVERY)
+    if job.initial then self:logPower("start") end
+    self:redraw(job.manual and "full" or "ui")
+    if job.ack then self:ackCommand(job.ack, self.page_ok) end
+end
+
+function Dashboard:checkWeather()
+    local job = self.weather_job
+    if not job then return end
+    local done, result = WeatherJob.take(job.pid)
+    if not done then
+        UIManager:scheduleIn(0.25, self._check_weather)
+        return
+    end
+    self.weather_job = nil
+    if not result then logger.warn("deskdash: weather worker returned no result") end
+    Bench.mark(self.wake_sample, "weather_wait")
+    self:finishWeather(job, result)
+    if self:canSleep() then
+        Bench.mark(self.wake_sample, "weather_redraw")
+        UIManager:nextTick(self._sleep)
+    else
+        self.wake_sample = nil
+    end
 end
 
 -- Battery mode switches Wi-Fi off between weather fetches (it otherwise reassociates at every minute wake).
@@ -283,26 +309,6 @@ function Dashboard:setWifi(on)
             os.execute("lipc-set-prop com.lab126.cmd wirelessEnable 0")
         end
     end
-end
-
--- Wi-Fi needs ~2 s to reassociate after a suspend, ~10 s after being switched on; wait for it (up to 30 s).
-function Dashboard:waitForWifi()
-    if not Device:isKindle() then return true end
-    local t0 = os.time()
-    local t_mono = time.now()
-    while os.time() - t0 < 30 do
-        local p = io.popen("lipc-get-prop com.lab126.wifid cmState 2>/dev/null")
-        local state = p and p:read("*l"); if p then p:close() end
-        if state == "CONNECTED" then
-            if os.time() > t0 then logger.info("deskdash: wifi up after", os.time() - t0, "s") end
-            self.pw.wifi = self.pw.wifi + time.to_number(time.since(t_mono))
-            return true
-        end
-        os.execute("sleep 1")
-    end
-    self.pw.wifi = self.pw.wifi + time.to_number(time.since(t_mono))
-    logger.warn("deskdash: wifi not connected after 30 s")
-    return false
 end
 
 local function readFile(path)
@@ -772,7 +778,7 @@ function Dashboard:scheduleTick()
 end
 
 function Dashboard:onTick()
-    local sample = Bench.start(self.benchmark, "wake")
+    local sample = self.wake_sample or Bench.start(self.benchmark and self:canSleep(), "wake")
     self:powerTick()
     if self.page ~= 1 and os.time() - self.last_touch >= IDLE_RETURN then
         self.page, self.show_settings = 1, nil
@@ -785,8 +791,13 @@ function Dashboard:onTick()
     if self:canSleep() then
         self.wake_sample = sample
         Bench.mark(sample, "build")
-        UIManager:nextTick(self._sleep)
+        if self.weather_job then
+            if sample then sample.kind = "weather_wake" end
+        else
+            UIManager:nextTick(self._sleep)
+        end
     else
+        self.wake_sample = nil
         self:restore()   -- staying awake (e.g. charger plugged in): undo the battery-mode light/Wi-Fi off
     end
 end
@@ -801,7 +812,7 @@ end
 function Dashboard:sleepUntilNextMinute()
     local sample = self.wake_sample
     self.wake_sample = nil
-    if not self:canSleep() then return end
+    if self.weather_job or not self:canSleep() then return end
     self.force_sleep = nil
     local secs = Weather.secondsToNextWake(self:localNow(), NIGHT)   -- next minute, or next 10 minutes at night
     if secs < 5 then return end   -- too close to the minute; the regular tick handles it
@@ -821,13 +832,8 @@ function Dashboard:sleepUntilNextMinute()
         self.light_off = true
     end
     Bench.mark(sample, "radios")
-    if sample then
-        os.execute("sync")
-        Bench.mark(sample, "sync")
-        os.execute(string.format("rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
-    else
-        os.execute(string.format("sync; rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
-    end
+    -- The PW4 kernel synchronizes filesystems on suspend entry.
+    os.execute(string.format("rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
     Bench.mark(sample, "suspend_resume_awake")
     Bench.finish(sample)
     local early = target - os.time()
@@ -886,8 +892,7 @@ function Dashboard:onTap(_, ges)
         self:redraw("ui")
         return true
     end
-    self:refreshWeather()
-    self:redraw("full")
+    self:refreshWeather(true)
     return true
 end
 
@@ -899,12 +904,24 @@ function Dashboard:onClose()
     return true
 end
 
+local function discardWeather(pid)
+    if not WeatherJob.take(pid) then UIManager:scheduleIn(0.25, discardWeather, pid) end
+end
+
 function Dashboard:onCloseWidget()
     UIManager:unschedule(self._tick)
     UIManager:unschedule(self._poll)
     UIManager:unschedule(self._sleep)
     UIManager:unschedule(self._ready)
     UIManager:unschedule(self._initial_fetch)
+    UIManager:unschedule(self._check_weather)
+    local job = self.weather_job
+    if job then
+        self.weather_job = nil
+        WeatherJob.cancel(job.pid)
+        discardWeather(job.pid)
+        if job.ack then writeCommandAck(job.ack, false) end
+    end
     os.remove(ROTATION_FILE)
     if Screen:getRotationMode() ~= self.previous_rotation then Screen:setRotationMode(self.previous_rotation) end
 end

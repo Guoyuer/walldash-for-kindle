@@ -76,8 +76,9 @@ function Weather.locate()
     local body = curl("http://ip-api.com/json/?fields=status,city,lat,lon,offset")
     if not body then return nil end
     local ok, t = pcall(json.decode, body)
-    if ok and type(t) == "table" and t.status == "success" then
-        return { city = t.city, lat = t.lat, lon = t.lon, offset = t.offset }
+    if ok and type(t) == "table" and t.status == "success" and type(t.lat) == "number" and type(t.lon) == "number" then
+        return { city = type(t.city) == "string" and t.city or nil, lat = t.lat, lon = t.lon,
+            offset = type(t.offset) == "number" and t.offset or nil }
     end
     logger.warn("deskdash: locate failed", body)
 end
@@ -127,18 +128,27 @@ function Weather.selectForecast(t)
     daily.sunrise = sunTimes(t.daily["sunrise" .. suffix], #daily.time)
     daily.sunset = sunTimes(t.daily["sunset" .. suffix], #daily.time)
     local uv = t.daily["uv_index_max" .. suffix]
-    daily.uv_index_max = type(uv) == "table" and uv or {}
+    daily.uv_index_max = {}
+    if type(uv) == "table" then
+        for i = 1, #daily.time do
+            if type(uv[i]) == "number" then daily.uv_index_max[i] = uv[i] end
+        end
+    end
     local units = type(t.daily_units) == "table" and t.daily_units or {}
-    t.daily_units = { precipitation_sum = units["precipitation_sum" .. suffix] }
-    t.hourly, t.daily = hourly, daily
+    local precipitation_unit = units["precipitation_sum" .. suffix]
+    local wind_unit = type(t.current_units) == "table" and t.current_units.wind_speed_10m
     local source = type(t.current) == "table" and t.current or {}
     local current = {}
     for _, field in ipairs(CURRENT) do
         local value = source[field]
         if type(value) == "number" then current[field] = value end
     end
-    t.current = current
-    return t
+    return {
+        hourly = hourly, daily = daily, current = current,
+        daily_units = { precipitation_sum = type(precipitation_unit) == "string" and precipitation_unit or nil },
+        current_units = { wind_speed_10m = type(wind_unit) == "string" and wind_unit or nil },
+        utc_offset_seconds = type(t.utc_offset_seconds) == "number" and t.utc_offset_seconds or nil,
+    }
 end
 
 --- Fetches the forecast. Returns a table, or nil + error.
@@ -211,10 +221,11 @@ function Weather.observation(lat, lon, cache)
     if not cache.station then
         local pt = nws(string.format("/points/%.4f,%.4f", lat, lon))
         local url = pt and pt.properties and pt.properties.observationStations
-        local st = url and nws(url:gsub("^https://api.weather.gov", "") .. "?limit=1")
+        local st = type(url) == "string" and nws(url:gsub("^https://api.weather.gov", "") .. "?limit=1")
         local f = st and st.features and st.features[1]
-        cache.station = f and f.properties and f.properties.stationIdentifier
-        if not cache.station then return nil end
+        local station = f and f.properties and f.properties.stationIdentifier
+        if type(station) ~= "string" then return nil end
+        cache.station = station
     end
     local o = nws("/stations/" .. cache.station .. "/observations/latest")
     local p = o and o.properties
@@ -237,8 +248,9 @@ function Weather.alerts(lat, lon)
     local list = {}
     for _, f in ipairs(t.features) do
         local p = f.properties or {}
-        if p.event then
-            table.insert(list, { event = p.event, ends = p.ends or p.expires, rank = SEVERITY[p.severity] or 5 })
+        if type(p.event) == "string" then
+            local ends = type(p.ends) == "string" and p.ends or p.expires
+            table.insert(list, { event = p.event, ends = type(ends) == "string" and ends or nil, rank = SEVERITY[p.severity] or 5 })
         end
     end
     table.sort(list, function(a, b) return a.rank < b.rank end)
