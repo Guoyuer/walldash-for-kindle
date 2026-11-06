@@ -119,7 +119,9 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   every Bench phase is aggregated in memory (wake.*, weather.*, command.*), plus resume.to_tick, refresh.ui/full,
   suspend.failed and CPU ms (cpu.koreader, cpu.system_busy/total). `python tools/power.py --metrics` ranks them.
   Monotonic awake times include up to ~1 s of RTC-resolution error per suspend (sleep is restored in whole seconds).
-  Dev flag `/tmp/deskdash_awake`: the dashboard doesn't sleep while it exists.
+  Dev flag `/tmp/deskdash_awake`: the dashboard doesn't sleep while it exists and keeps Wi-Fi on; with it, the
+  `sleep` command runs one real cycle that sleeps only 6 s, so `bench on` + 10x `kctl command sleep` + `flush`
+  benchmarks wakes in ~1.5 min. `flush` writes the power/metrics rows immediately.
 - The `cc` column is the gauge's raw coulomb counter (~69800 counts/mAh); use it over `charge_mAh` (1 mAh steps).
   The touch controller is locked (`/proc/touch`) around each `rtcwake` (~0.5 mA lower). Currents: docs/performance-benchmarks.md.
 - Bypasses the stock powerd (it keeps `preventScreenSaver 1`); powerd hasn't objected so far.
