@@ -201,6 +201,7 @@ function Dashboard:pollCommand()
             self.last_touch, self.force_sleep = 0, true
             UIManager:unschedule(self._tick)
             self:onTick()
+        elseif cmd == "flush" then self:logPower("flush")   -- write the hourly power/metrics rows now
         elseif cmd == "demo" or cmd == "demo off" then self.demo = (cmd == "demo"); self:redraw("full")
         elseif cmd == "next" then self:onSwipe(nil, { direction = "west" })
         elseif cmd == "prev" then self:onSwipe(nil, { direction = "east" })
@@ -932,9 +933,10 @@ local function exists(path)
 end
 
 function Dashboard:canSleep()
-    return self.settings.battery_mode and Device:isKindle() and self.page == 1
-        and not exists(STAY_AWAKE_FLAG)
-        and os.time() - self.last_touch >= AWAKE_AFTER_INPUT and (self.force_sleep or not self:onExternalPower())
+    if not (self.settings.battery_mode and Device:isKindle()) then return false end
+    if self.force_sleep then return true end   -- `sleep` command: one real cycle, even plugged in or with the dev flag
+    return self.page == 1 and not exists(STAY_AWAKE_FLAG)
+        and os.time() - self.last_touch >= AWAKE_AFTER_INPUT and not self:onExternalPower()
 end
 
 -- Suspend to RAM until the next minute. KOReader's timers use a clock that stops while suspended,
@@ -943,8 +945,10 @@ function Dashboard:sleepUntilNextMinute()
     local sample = self.wake_sample
     self.wake_sample = nil
     if self.weather_job or not self:canSleep() then return end
-    self.force_sleep = nil
     local secs = Weather.secondsToNextWake(self:localNow(), NIGHT)   -- next minute, or next 10 minutes at night
+    -- A forced cycle with the dev flag (benchmarks) sleeps only 6 s, so samples don't wait for the minute.
+    if self.force_sleep and exists(STAY_AWAKE_FLAG) then secs = 6 end
+    self.force_sleep = nil
     if secs < 5 then return end   -- too close to the minute; the regular tick handles it
     local target = os.time() + secs
     UIManager:unschedule(self._tick)
@@ -955,7 +959,7 @@ function Dashboard:sleepUntilNextMinute()
     Bench.mark(sample, "epdc_wait")
     -- The frontlight comes back on at every resume, so switch it off while in battery mode;
     -- it (and Wi-Fi) are turned back on only when staying awake (power button, charger).
-    self:setWifi(false)
+    if not exists(STAY_AWAKE_FLAG) then self:setWifi(false) end   -- dev flag: keep SSH between forced cycles
     local powerd = Device:hasFrontlight() and Device.powerd
     if powerd and powerd:isFrontlightOn() then
         powerd:turnOffFrontlight()
