@@ -53,6 +53,7 @@ local FLASH_EVERY = 30           -- flashing full refresh when the minute is a m
 local AWAKE_AFTER_INPUT = 60     -- stay awake this long after a touch / power-button wake
 local LOW_BATTERY = 20           -- % at which a "charge me" badge appears (on battery only)
 local POWER_LOG = "/mnt/us/deskdash_power.csv"   -- hourly power stats; analyse with tools/power.py
+local METRICS_LOG = "/mnt/us/deskdash_metrics.csv"   -- hourly per-phase timings; tools/power.py --metrics
 local BAT = "/sys/class/power_supply/bd71827_bat/"
 -- Night (local hours [from, to)): wake only every `step` minutes and don't fetch the weather.
 local NIGHT = { from = 2, to = 5, step = 10 }
@@ -172,7 +173,7 @@ function Dashboard:ackCommand(id, ok, sample)
     Bench.mark(sample, "submit")
     UIManager:waitForVSync()
     Bench.mark(sample, "epdc_wait")
-    Bench.finish(sample)
+    Bench.finish(sample, self.pw.stats)
     writeCommandAck(id, ok)
 end
 
@@ -223,11 +224,11 @@ function Dashboard:pollCommand()
         Bench.mark(sample, "dispatch")
         if id and (cmd == "refresh" or cmd == "weather ready") and self.weather_job then
             self.weather_job.ack = id
-            Bench.finish(sample)
+            Bench.finish(sample, self.pw.stats)
         elseif id then
             self:ackCommand(id, handled and self.page_ok, sample)
         else
-            Bench.finish(sample)
+            Bench.finish(sample, self.pw.stats)
         end
     end
     UIManager:scheduleIn(1, self._poll)
@@ -262,6 +263,7 @@ end
 function Dashboard:finishWeather(job, result)
     if result then
         self.pw.wifi = self.pw.wifi + result.wifi_s
+        for _, phase in ipairs(result.phases or {}) do Bench.add(self.pw.stats, "weather." .. phase[1], phase[2]) end
         local loc, s = result.location, self.settings
         if loc then
             s.lat, s.lon, s.city = s.lat or loc.lat, s.lon or loc.lon, s.city or loc.city
@@ -361,8 +363,57 @@ local function rawCoulombCounter()
     return string.format("%d", v)
 end
 
+-- CPU ticks (1/100 s) since boot: this process (user+system) and the whole system (busy, total).
+-- Neither advances while suspended.
+local function cpuTicks()
+    local own, busy, total = 0, 0, 0
+    local f = io.open("/proc/self/stat", "r")
+    if f then
+        local fields = {}
+        for v in (f:read("*l") or ""):gsub("^.*%) ", ""):gmatch("%S+") do fields[#fields + 1] = v end
+        f:close()
+        own = (tonumber(fields[12]) or 0) + (tonumber(fields[13]) or 0)   -- utime, stime
+    end
+    f = io.open("/proc/stat", "r")
+    if f then
+        local i = 0
+        for v in (f:read("*l") or ""):gmatch("%d+") do
+            i = i + 1
+            total = total + tonumber(v)
+            if i ~= 4 and i ~= 5 then busy = busy + tonumber(v) end   -- idle, iowait
+        end
+        f:close()
+    end
+    return own, busy, total
+end
+
+-- Hourly metrics, long format (time,event,metric,n,sum,max) so new metrics need no new columns.
+-- Values are ms unless the name says otherwise; counts have sum = n. Written next to the power row.
+local METRICS_HEADER = "time,event,metric,n,sum,max\n"
+
 function Dashboard:resetPowerStats()
-    self.pw = { t = os.time(), mono = time.now(), wakes = 0, early = 0, fetches = 0, fails = 0, wifi = 0, ac = self.pw and self.pw.ac }
+    local own, busy, total = cpuTicks()
+    self.pw = { t = os.time(), mono = time.now(), wakes = 0, early = 0, fetches = 0, fails = 0, wifi = 0,
+        ac = self.pw and self.pw.ac, stats = {}, cpu = { own, busy, total } }
+end
+
+function Dashboard:logMetrics(stamp, event)
+    local pw = self.pw
+    local own, busy, total = cpuTicks()
+    Bench.add(pw.stats, "cpu.koreader", (own - pw.cpu[1]) * 10)
+    Bench.add(pw.stats, "cpu.system_busy", (busy - pw.cpu[2]) * 10)
+    Bench.add(pw.stats, "cpu.system_total", (total - pw.cpu[3]) * 10)
+    local f = io.open(METRICS_LOG, "a")
+    if not f then return end
+    if f:seek("end") == 0 then f:write(METRICS_HEADER) end
+    local keys = {}
+    for k in pairs(pw.stats) do keys[#keys + 1] = k end
+    table.sort(keys)
+    for _, k in ipairs(keys) do
+        local v = pw.stats[k]
+        f:write(string.format("%s,%s,%s,%d,%.1f,%.1f\n", stamp, event, k, v.n, v.sum, v.max))
+    end
+    f:close()
 end
 
 function Dashboard:logPower(event)
@@ -384,13 +435,15 @@ function Dashboard:logPower(event)
                 f:seek("end")
             end
         end
+        local stamp = os.date("!%Y-%m-%d %H:%M", self:localNow())
         local num = function(name, div) local v = tonumber(readFile(BAT .. name) or ""); return v and v / div or "" end
         f:write(string.format("%s,%s,%s,%s,%s,%d,%s,%d,%.1f,%d,%d,%d,%d,%.1f,%s\n",
-            os.date("!%Y-%m-%d %H:%M", self:localNow()), event, readFile(BAT .. "capacity") or "",
+            stamp, event, readFile(BAT .. "capacity") or "",
             num("charge_now", 1000), num("voltage_now", 1000), self:onExternalPower() and 1 or 0, readFile(BAT .. "temp") or "",
             os.time() - pw.t, time.to_number(time.since(pw.mono)), pw.wakes, pw.early, pw.fetches, pw.fails, pw.wifi,
             rawCoulombCounter()))
         f:close()
+        self:logMetrics(stamp, event)
     end
     self:resetPowerStats()
 end
@@ -830,7 +883,11 @@ function Dashboard:scheduleTick()
 end
 
 function Dashboard:onTick()
-    local sample = self.wake_sample or Bench.start(self.benchmark and self:canSleep(), "wake")
+    local sample = self.wake_sample or Bench.start(self.benchmark, "wake")
+    if self.resumed_at then   -- rtcwake returned -> this tick started
+        Bench.add(self.pw.stats, "resume.to_tick", time.to_ms(time.now() - self.resumed_at))
+        self.resumed_at = nil
+    end
     self:powerTick()
     if self.page ~= 1 and os.time() - self.last_touch >= IDLE_RETURN then
         self.page, self.show_settings = 1, nil
@@ -838,7 +895,9 @@ function Dashboard:onTick()
     local now = self:localNow()
     if not Weather.isNight(now, NIGHT) and os.time() >= self.next_fetch_at then self:refreshWeather() end
     Bench.mark(sample, "tick_and_weather")
-    self:redraw(tonumber(os.date("!%M", now)) % FLASH_EVERY == 0 and "full" or "ui")
+    local mode = tonumber(os.date("!%M", now)) % FLASH_EVERY == 0 and "full" or "ui"
+    Bench.add(self.pw.stats, "refresh." .. mode, 1)
+    self:redraw(mode)
     self:scheduleTick()
     if self:canSleep() then
         self.wake_sample = sample
@@ -906,10 +965,14 @@ function Dashboard:sleepUntilNextMinute()
     -- The PW4 kernel synchronizes filesystems on suspend entry.
     -- Locking the touch controller (as the stock suspend does) measured ~0.5 mA lower in suspend (3.1 vs 3.5).
     -- Touch can't wake the device anyway; unlock right after so input works on every wake.
-    os.execute(string.format("echo lock >/proc/touch; rtcwake -d %s -m mem -s %d >/dev/null 2>&1; echo unlock >/proc/touch",
+    -- time.now() is monotonic (stops while suspended), so suspend_resume_awake is only the awake part of rtcwake.
+    local rc = os.execute(string.format(
+        "echo lock >/proc/touch; rtcwake -d %s -m mem -s %d >/dev/null 2>&1; r=$?; echo unlock >/proc/touch; exit $r",
         RTC, secs))
     Bench.mark(sample, "suspend_resume_awake")
-    Bench.finish(sample)
+    Bench.finish(sample, self.pw.stats)
+    self.resumed_at = time.now()
+    if rc ~= 0 and rc ~= true then Bench.add(self.pw.stats, "suspend.failed", 1) end
     local early = target - os.time()
     self.pw.wakes = self.pw.wakes + 1
     if early > 2 then

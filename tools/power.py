@@ -2,6 +2,7 @@
 
   python tools/power.py            # fetch from the Kindle over ssh, print per-interval table + battery summary
   python tools/power.py file.csv   # analyse a local copy
+  python tools/power.py --metrics [file.csv]   # hourly per-phase timings (/mnt/us/deskdash_metrics.csv)
 
 Average current = drop of the fuel gauge's coulomb counter (charge_mAh) per hour, on battery intervals only.
 A least-squares fit  mA = sleep_mA + k * awake_fraction  splits the drain into "asleep" and "awake" cost.
@@ -28,8 +29,31 @@ def load():
     return r.stdout
 
 
+def metrics(local=None):
+    """Totals per metric over the whole file, sorted by total time: where the awake milliseconds go."""
+    rows = list(csv.DictReader(io.StringIO(load("metrics", local))))
+    tot = {}
+    for r in rows:
+        try:
+            n, sm, mx = int(r["n"]), float(r["sum"]), float(r["max"])
+        except (KeyError, ValueError):
+            continue
+        t = tot.setdefault(r["metric"], [0, 0.0, 0.0])
+        t[0] += n; t[1] += sm; t[2] = max(t[2], mx)
+    hours = len({r["time"] for r in rows if r.get("event") == "hour"}) or 1
+    print(f"{len(rows)} rows, ~{hours} hourly flushes ({rows[0]['time'] if rows else '-'} .. {rows[-1]['time'] if rows else '-'})\n")
+    print(f'{"metric":34} {"n":>7} {"mean":>9} {"max":>9} {"total s":>9} {"s/hour":>8}')
+    for k, (n, sm, mx) in sorted(tot.items(), key=lambda kv: -kv[1][1]):
+        print(f"{k:34} {n:7d} {sm / max(n, 1):9.1f} {mx:9.1f} {sm / 1000:9.1f} {sm / 1000 / hours:8.2f}")
+    print("\nms unless noted; refresh.* and suspend.failed are counts (mean 1). wake.* phases of a minute wake:"
+          " tick_and_weather, build, submit (paint), epdc_wait (e-ink), radios, suspend_resume_awake (kernel), total.")
+
+
 def main():
-    rows = list(csv.DictReader(io.StringIO(load())))
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if "--metrics" in sys.argv:
+        return metrics(args[0] if args else None)
+    rows = list(csv.DictReader(io.StringIO(load("power", args[0] if args else None))))
     ivs = []   # battery intervals
     for prev, cur in zip(rows, rows[1:]):
         try:
