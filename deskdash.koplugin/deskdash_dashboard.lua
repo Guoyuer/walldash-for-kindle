@@ -127,6 +127,10 @@ function Dashboard:init()
     self:keepAwake(true)
     self:resetPowerStats()
     self.pw.ac = self:onExternalPower()
+    if Device:isKindle() then   -- a crash while locked would leave the touchscreen dead
+        local f = io.open("/proc/touch", "w")
+        if f then f:write("unlock"); f:close() end
+    end
     self:rebuild()
     self:scheduleTick()
 end
@@ -963,12 +967,12 @@ function Dashboard:sleepUntilNextMinute()
     end
     Bench.mark(sample, "radios")
     -- The PW4 kernel synchronizes filesystems on suspend entry.
-    -- Locking the touch controller (as the stock suspend does) measured ~0.5 mA lower in suspend (3.1 vs 3.5).
-    -- Touch can't wake the device anyway; unlock right after so input works on every wake.
+    -- Touch stays locked (gt9xx asleep, powered off) across minute wakes: it can't wake the device and nobody
+    -- can use it in a 2 s wake, and each lock/unlock costs ~60/150 ms of driver sleeps (gt9xx.c). restore()
+    -- unlocks it whenever the dashboard stays awake. Locked also measured ~0.5 mA lower in suspend.
+    self:setTouch(false)
     -- time.now() is monotonic (stops while suspended), so suspend_resume_awake is only the awake part of rtcwake.
-    local rc = os.execute(string.format(
-        "echo lock >/proc/touch; rtcwake -d %s -m mem -s %d >/dev/null 2>&1; r=$?; echo unlock >/proc/touch; exit $r",
-        RTC, secs))
+    local rc = os.execute(string.format("rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
     Bench.mark(sample, "suspend_resume_awake")
     Bench.finish(sample, self.pw.stats)
     self.resumed_at = time.now()
@@ -987,7 +991,17 @@ function Dashboard:sleepUntilNextMinute()
     end
 end
 
+-- /proc/touch: "lock" puts the gt9xx to sleep and cuts its power, "unlock" resets and wakes it.
+function Dashboard:setTouch(on)
+    if not Device:isKindle() or (not on) == (self.touch_locked or false) then return end
+    local f = io.open("/proc/touch", "w")
+    if not f then return end
+    f:write(on and "unlock" or "lock"); f:close()
+    self.touch_locked = not on or nil
+end
+
 function Dashboard:restore()
+    self:setTouch(true)
     if self.light_off then
         self.light_off = nil
         Device.powerd:turnOnFrontlight()
