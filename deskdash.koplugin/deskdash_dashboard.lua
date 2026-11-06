@@ -344,7 +344,22 @@ end
 -- Counters live in memory; one CSV row per hour (and on plug/unplug). Awake time comes for free: KOReader's
 -- monotonic clock doesn't advance during suspend, so its delta between two rows is the time spent awake.
 -- charge_mAh is the fuel gauge's coulomb counter: its drop per hour is the average current in mA.
-local POWER_HEADER = "time,event,pct,charge_mAh,mV,ac,temp_C,wall_s,awake_s,wakes,early,fetches,fails,wifi_s\n"
+-- It only has 1 mAh steps, so cc also logs the gauge's raw counter (BD71827 registers 0x79-0x7C, big-endian,
+-- decreasing while discharging); tools/power.py turns its change into mA.
+local POWER_HEADER = "time,event,pct,charge_mAh,mV,ac,temp_C,wall_s,awake_s,wakes,early,fetches,fails,wifi_s,cc\n"
+
+local function rawCoulombCounter()
+    local f = io.open(BAT .. "registers", "r")
+    if not f then return "" end
+    local regs = f:read("*a"); f:close()
+    local v = 0
+    for a = 0x79, 0x7C do
+        local byte = regs:match(string.format("%%[0x%02X%%] = (%%x%%x)", a))
+        if not byte then return "" end
+        v = v * 256 + tonumber(byte, 16)
+    end
+    return string.format("%d", v)
+end
 
 function Dashboard:resetPowerStats()
     self.pw = { t = os.time(), mono = time.now(), wakes = 0, early = 0, fetches = 0, fails = 0, wifi = 0, ac = self.pw and self.pw.ac }
@@ -353,14 +368,28 @@ end
 function Dashboard:logPower(event)
     if not Device:isKindle() then return end
     local pw = self.pw
-    local f = io.open(POWER_LOG, "a")
+    local f = io.open(POWER_LOG, "a+")   -- a+: read the header, writes still append
     if f then
-        if f:seek("end") == 0 then f:write(POWER_HEADER) end
+        if f:seek("end") == 0 then
+            f:write(POWER_HEADER)
+        else   -- older column layout: keep it as .old and start a new file
+            f:seek("set")
+            if (f:read("*l") or "") .. "\n" ~= POWER_HEADER then
+                f:close()
+                os.rename(POWER_LOG, POWER_LOG .. ".old")
+                f = io.open(POWER_LOG, "a")
+                if not f then return self:resetPowerStats() end
+                f:write(POWER_HEADER)
+            else
+                f:seek("end")
+            end
+        end
         local num = function(name, div) local v = tonumber(readFile(BAT .. name) or ""); return v and v / div or "" end
-        f:write(string.format("%s,%s,%s,%s,%s,%d,%s,%d,%.1f,%d,%d,%d,%d,%.1f\n",
+        f:write(string.format("%s,%s,%s,%s,%s,%d,%s,%d,%.1f,%d,%d,%d,%d,%.1f,%s\n",
             os.date("!%Y-%m-%d %H:%M", self:localNow()), event, readFile(BAT .. "capacity") or "",
             num("charge_now", 1000), num("voltage_now", 1000), self:onExternalPower() and 1 or 0, readFile(BAT .. "temp") or "",
-            os.time() - pw.t, time.to_number(time.since(pw.mono)), pw.wakes, pw.early, pw.fetches, pw.fails, pw.wifi))
+            os.time() - pw.t, time.to_number(time.since(pw.mono)), pw.wakes, pw.early, pw.fetches, pw.fails, pw.wifi,
+            rawCoulombCounter()))
         f:close()
     end
     self:resetPowerStats()
@@ -825,8 +854,19 @@ function Dashboard:onTick()
     end
 end
 
+-- Development: while this file exists the dashboard never sleeps, so SSH stays reachable on battery
+-- (on-device test scripts still suspend by themselves). In /tmp, so a reboot clears it.
+local STAY_AWAKE_FLAG = "/tmp/deskdash_awake"
+
+local function exists(path)
+    local f = io.open(path, "r")
+    if f then f:close() end
+    return f ~= nil
+end
+
 function Dashboard:canSleep()
     return self.settings.battery_mode and Device:isKindle() and self.page == 1
+        and not exists(STAY_AWAKE_FLAG)
         and os.time() - self.last_touch >= AWAKE_AFTER_INPUT and (self.force_sleep or not self:onExternalPower())
 end
 
@@ -854,9 +894,20 @@ function Dashboard:sleepUntilNextMinute()
         powerd:turnOffFrontlight()
         self.light_off = true
     end
+    -- KOReader's Kindle powerd defers the hardware write to a later UI tick, which doesn't come before rtcwake,
+    -- and its idea of the light can drift from the hardware. Make sure the LED is really off while asleep.
+    for _, fl in ipairs(powerd and powerd.fl_intensity_files or {}) do
+        if tonumber(readFile(fl) or "0") ~= 0 then
+            local f = io.open(fl, "w")
+            if f then f:write("0"); f:close() end
+        end
+    end
     Bench.mark(sample, "radios")
     -- The PW4 kernel synchronizes filesystems on suspend entry.
-    os.execute(string.format("rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
+    -- Locking the touch controller (as the stock suspend does) measured ~0.5 mA lower in suspend (3.1 vs 3.5).
+    -- Touch can't wake the device anyway; unlock right after so input works on every wake.
+    os.execute(string.format("echo lock >/proc/touch; rtcwake -d %s -m mem -s %d >/dev/null 2>&1; echo unlock >/proc/touch",
+        RTC, secs))
     Bench.mark(sample, "suspend_resume_awake")
     Bench.finish(sample)
     local early = target - os.time()

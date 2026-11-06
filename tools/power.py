@@ -10,6 +10,9 @@ import csv, io, os, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FULL_MAH = 1503   # charge_full on this PW4
+# Raw coulomb-counter counts (BD71827 regs 0x79-0x7C) per mAh. Calibrated on 2026-11-05 against the gauge's
+# charge_now over 40 min / 1 h of discharge and against 1 s current_now samples: ~19.4 counts/s per mA.
+CC_PER_MAH = 69800
 
 
 def load():
@@ -37,7 +40,11 @@ def main():
             wall = float(cur["wall_s"])
             if wall < 600:
                 continue   # too short for the gauge's resolution
-            ivs.append(dict(end=cur["time"], h=wall / 3600, mah=float(prev["charge_mAh"]) - float(cur["charge_mAh"]),
+            if prev.get("cc") and cur.get("cc"):   # raw gauge counter: far finer than charge_mAh's 1 mAh steps
+                mah = (int(prev["cc"]) - int(cur["cc"])) / CC_PER_MAH
+            else:
+                mah = float(prev["charge_mAh"]) - float(cur["charge_mAh"])
+            ivs.append(dict(end=cur["time"], h=wall / 3600, mah=mah,
                             awake=float(cur["awake_s"]) / wall, wakes=int(cur["wakes"]), early=int(cur["early"]),
                             fetches=int(cur["fetches"]), fails=int(cur["fails"]), wifi=float(cur["wifi_s"]),
                             pct=f'{prev["pct"]}->{cur["pct"]}'))
