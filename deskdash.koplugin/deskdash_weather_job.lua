@@ -32,6 +32,7 @@ local function collect(opts, pid)
     Bench.mark(sample, "wifi")
     if not connected then
         Bench.finish(sample)
+        result.phases = sample.phases
         return result
     end
 
@@ -62,6 +63,7 @@ local function collect(opts, pid)
         result.aq = aq_i and Weather.parseAirQuality(bodies[aq_i])
     end
     Bench.finish(sample)
+    result.phases = sample.phases   -- the dashboard adds them to its hourly metrics
     return result
 end
 
