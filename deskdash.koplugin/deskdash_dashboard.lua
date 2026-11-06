@@ -899,7 +899,11 @@ function Dashboard:onTick()
     local now = self:localNow()
     if not Weather.isNight(now, NIGHT) and os.time() >= self.next_fetch_at then self:refreshWeather() end
     Bench.mark(sample, "tick_and_weather")
-    local mode = tonumber(os.date("!%M", now)) % FLASH_EVERY == 0 and "full" or "ui"
+    -- On battery the minute repaint uses "fast" (DU, ~260 ms) instead of "ui" (AUTO -> GC16 for anti-aliased
+    -- digits, ~450 ms): only changed pixels are driven, so static gray text keeps its levels; the new digits lose
+    -- their gray edges until the flashing full refresh every FLASH_EVERY minutes.
+    local mode = tonumber(os.date("!%M", now)) % FLASH_EVERY == 0 and "full"
+        or (self:canSleep() and "fast" or "ui")
     Bench.add(self.pw.stats, "refresh." .. mode, 1)
     self:redraw(mode)
     self:scheduleTick()
