@@ -115,6 +115,8 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   KOReader's monotonic clock (stops during suspend), so it costs nothing per wake. charge_mAh = fuel-gauge coulomb
   counter (`bd71827_bat/charge_now`, µAh), its drop per hour = average mA. `python tools/power.py` fetches it and
   prints mA per interval, awake %, projected days, and a fit mA = asleep + k·awake. Use it to judge power changes.
+- The `cc` column is the gauge's raw coulomb counter (~69800 counts/mAh); use it over `charge_mAh` (1 mAh steps).
+  The touch controller is locked (`/proc/touch`) around each `rtcwake` (~0.5 mA lower). Currents: docs/performance-benchmarks.md.
 - Bypasses the stock powerd (it keeps `preventScreenSaver 1`); powerd hasn't objected so far.
 
 ## Known quirks / decisions
