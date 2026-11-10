@@ -16,15 +16,18 @@ FULL_MAH = 1503   # charge_full on this PW4
 CC_PER_MAH = 69800
 
 
-def load():
-    if len(sys.argv) > 1:
-        return open(sys.argv[1], encoding="utf-8").read()
+def load(kind, local=None):
+    if local:
+        with open(local, encoding="utf-8") as f:
+            return f.read()
     host = os.environ.get("KINDLE_SSH", "kindle")
-    r = subprocess.run(["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", host, "cat /mnt/us/deskdash_power.csv"],
+    r = subprocess.run(["ssh", "-o", "ConnectTimeout=8", "-o", "BatchMode=yes", host, f"cat /mnt/us/deskdash_{kind}.csv"],
                        capture_output=True, text=True)
     if r.returncode:
         sys.exit("can't read the log (Kindle asleep? plug it in or press the power button)\n" + r.stderr)
-    with open(os.path.join(HERE, "inbox", "power.csv"), "w", encoding="utf-8") as f:
+    inbox = os.path.join(HERE, "inbox")
+    os.makedirs(inbox, exist_ok=True)
+    with open(os.path.join(inbox, f"{kind}.csv"), "w", encoding="utf-8") as f:
         f.write(r.stdout)
     return r.stdout
 
@@ -57,8 +60,8 @@ def main():
     ivs = []   # battery intervals
     for prev, cur in zip(rows, rows[1:]):
         try:
-            # on battery from prev to cur ("plug" rows close a battery interval)
-            on_battery = prev["ac"] == "0" and (cur["ac"] == "0" or cur["event"] == "plug")
+            # A plug row may already include some charging. Start rows reset the interval counters.
+            on_battery = prev["ac"] == cur["ac"] == "0" and cur["event"] not in ("start", "unplug")
             if not on_battery or not prev["charge_mAh"] or not cur["charge_mAh"]:
                 continue
             wall = float(cur["wall_s"])
@@ -97,7 +100,7 @@ def main():
         print(f"Projected runtime on a full charge ({FULL_MAH} mAh): {FULL_MAH / ma / 24:.1f} days")
 
     # mA = a + b * awake  (needs some spread in awake fraction, e.g. a power-button session or a plugged hour)
-    if len(ivs) >= 3:
+    if ma > 0 and len(ivs) >= 3:
         xs, ys = [i["awake"] for i in ivs], [i["mah"] / i["h"] for i in ivs]
         mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
         sxx = sum((x - mx) ** 2 for x in xs)

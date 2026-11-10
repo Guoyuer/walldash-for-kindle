@@ -32,6 +32,14 @@ function DeskDash:init()
     })
     self.ui.menu:registerToMainMenu(self)
     UIManager.event_hook:registerWidget("InputEvent", self)
+    -- This Kindle is only a wall clock and the dashboard does its own suspending, so KOReader's autosuspend
+    -- plugin stays off (Tools > More tools > Plugin management turns it back on). Applies from the next start.
+    local disabled = G_reader_settings:readSetting("plugins_disabled") or {}
+    if not disabled.autosuspend then
+        disabled.autosuspend = true
+        G_reader_settings:saveSetting("plugins_disabled", disabled)
+        require("logger").info("deskdash: disabled the autosuspend plugin (after the next KOReader start)")
+    end
     DeskDash._instance = self   -- the plugin is re-instantiated per FileManager/ReaderUI; keep the live one
     -- Auto-open once per KOReader run, on top of whatever KOReader opened (file browser or last book).
     if setting("autostart", true) and not DeskDash._autostarted then
@@ -53,7 +61,7 @@ function DeskDash:onInputEvent()
 end
 
 function DeskDash._watchdog()
-    if not DeskDash._dash and setting("autostart", true) and DeskDash._instance then
+    if not DeskDash._dash and not DeskDash._suspend_failed and setting("autostart", true) and DeskDash._instance then
         local ReaderUI = package.loaded["apps/reader/readerui"]
         local reading = ReaderUI and ReaderUI.instance
         if not reading and os.time() - DeskDash._last_input >= REOPEN_IDLE then
@@ -93,6 +101,11 @@ end
 function DeskDash:onShowDeskDash()
     if DeskDash._dash then return true end
     local dash = Dashboard:new{
+        on_closed = function(closed)
+            DeskDash._dash = nil
+            DeskDash._last_input = os.time()   -- the reopen countdown starts when it's closed
+            DeskDash._suspend_failed = closed.power_failed
+        end,
         settings = {
             units = setting("units", "metric"),
             clock_24h = setting("clock_24h", true),
@@ -102,13 +115,6 @@ function DeskDash:onShowDeskDash()
             lat = setting("lat", nil), lon = setting("lon", nil), city = setting("city", nil),
         },
     }
-    local orig_close = dash.onClose
-    dash.onClose = function(d)
-        orig_close(d)
-        DeskDash._dash = nil
-        DeskDash._last_input = os.time()   -- the reopen countdown starts when it's closed
-        return true
-    end
     DeskDash._dash = dash
     UIManager:show(dash, "full")
     return true
