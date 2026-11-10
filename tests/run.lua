@@ -122,6 +122,7 @@ eq("battery slot :33", W.secondsToSlot(at("13:20:15"), 30, 3, 300), 12 * 60 + 45
 eq("fetch at :03 -> :33", W.secondsToSlot(at("13:03:15"), 30, 3, 300), 29 * 60 + 45)
 eq("manual :31 skips :33", W.secondsToSlot(at("13:31:00"), 30, 3, 300), 32 * 60)
 eq("plugged slot :18", W.secondsToSlot(at("13:03:10"), 15, 3, 300), 14 * 60 + 50)
+eq("hourly battery slot :03", W.secondsToSlot(at("13:03:15"), 60, 3, 300), 59 * 60 + 45)
 eq("slot crosses midnight", os.date("!%H:%M", at("23:50:00") + W.secondsToSlot(at("23:50:00"), 30, 3, 300)), "00:03")
 eq("missing forecast body", select(2, W.parseForecast(nil)), "no response")
 eq("missing alerts body", W.parseAlerts(nil), nil)

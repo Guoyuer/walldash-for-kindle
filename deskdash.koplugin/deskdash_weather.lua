@@ -60,7 +60,9 @@ Weather.ICON = {
     thermometer = U(0xE350), humidity = U(0xE373), wind = U(0xE34B),
     uv = SUN, sunrise = U(0xE34C), sunset = U(0xE34D),
     umbrella = U(0xE37C), smog = U(0xE36D),
-    warning = U(0xF071), settings = U(0xF013), battery_low = U(0xF243), battery_empty = U(0xF244),   -- FontAwesome
+    warning = U(0xF071), settings = U(0xF013),   -- FontAwesome
+    battery_full = U(0xF240), battery_three_quarters = U(0xF241), battery_half = U(0xF242),
+    battery_low = U(0xF243), battery_empty = U(0xF244),
 }
 
 local CODES = {

@@ -79,7 +79,7 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   Weather glyphs from KOReader's `nerdfonts/symbols.ttf`.
 - `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details). Swipe = page,
   tap = refresh, long-press = close. Ticks on each minute; weather at fixed wall-clock slots a few minutes
-  after NWS stations report: :03/:18/:33/:48 plugged in, :03/:33 on battery (`WEATHER_STEP*`, `Weather.secondsToSlot`;
+  after NWS stations report: :03/:18/:33/:48 plugged in, :03 on battery (`WEATHER_STEP*`, `Weather.secondsToSlot`;
   failed automatic requests back off from 1 min to at most 15 min). The worker sends forecast, alerts, observation
   and AQI as parallel `curl`s (`Weather.curlAll`); AQI only when the cached value is ≥ 55 min old;
   flashing full refresh every 30 min; back to page 1 after 2 min idle. Pages 2–4 have page dots and a settings gear for
@@ -134,6 +134,8 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 - The stock status bar (Wi-Fi/battery; five dashes while Wi-Fi reconnects) sometimes shows in the top-right corner
   even though KOReader stops `awesome` and disables pillow. The user said this is fine; don't spend time on it.
 - The user prefers simple solutions, no NAS/server dependency, and tapping KOReader by hand after a reboot (no boot autostart).
+- The Kindle is only a wall clock, so `main.lua` adds `autosuspend` to KOReader's `plugins_disabled` (effective from
+  the next KOReader start). Don't add hand-over code for that plugin or patch it on the device.
 - `initctl stop lab126_gui` was tried and rejected: the stock UI takes 30–60 s to come back.
 - `ref/` (gitignored) has KOReader source for API reference; the device copy is in `/mnt/us/koreader/frontend/`.
 

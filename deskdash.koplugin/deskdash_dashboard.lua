@@ -43,10 +43,11 @@ local IDLE_RETURN = 120          -- seconds on another page before returning to 
 -- Weather fetches run at fixed wall-clock minutes, a few minutes after NWS stations' hourly reports (~:51-:56).
 -- Each one switches Wi-Fi on for ~10 s, the most expensive thing in battery mode, so it is half as often there.
 local WEATHER_STEP = 15          -- minutes between fetches when plugged in
-local WEATHER_STEP_BATTERY = 30  -- minutes between fetches on battery
-local WEATHER_SLOT = 3           -- slot offset in minutes: :03, :18, :33, :48 (battery: :03, :33)
+local WEATHER_STEP_BATTERY = 60  -- minutes between fetches on battery (stations and NBM update hourly)
+local WEATHER_SLOT = 3           -- slot offset in minutes: :03, :18, :33, :48 (battery: :03)
 local WEATHER_GAP = 5 * 60       -- a manual refresh doesn't trigger another fetch within this many seconds
 local WEATHER_RETRY_MAX = 15 * 60  -- failed automatic fetches back off from 1 min to this
+local WEATHER_TIMEOUT = time.s(120) -- Wi-Fi, location, station discovery and forecast combined
 local AQ_EVERY = 55 * 60         -- the CAMS AQI estimate is hourly; fetch it at most this often
 local FLASH_EVERY = 30           -- flashing full refresh when the minute is a multiple of this
 -- Battery mode: on battery, suspend to RAM between minute updates (e-ink keeps the picture).
@@ -58,6 +59,8 @@ local BAT = "/sys/class/power_supply/bd71827_bat/"
 -- Night (local hours [from, to)): wake only every `step` minutes and don't fetch the weather.
 local NIGHT = { from = 2, to = 5, step = 10 }
 local RTC = "/dev/rtc1"          -- the wake-capable RTC on the PW4 (snvs)
+local RTC_ERROR = "/tmp/deskdash_rtcwake.err"
+local SUSPEND_FAILURE_LIMIT = 3
 local ROTATION_FILE = "/tmp/deskdash_rotation"
 
 -- Font:getFace() scales sizes by DPI; we think in screen pixels.
@@ -124,7 +127,6 @@ function Dashboard:init()
     self._initial_fetch = function() self:refreshWeather() end
     self._check_weather = function() self:checkWeather() end
     self.next_fetch_at = math.huge
-    self:keepAwake(true)
     self:resetPowerStats()
     self.pw.ac = self:onExternalPower()
     if Device:isKindle() then   -- a crash while locked would leave the touchscreen dead
@@ -132,6 +134,7 @@ function Dashboard:init()
         if f then f:write("unlock"); f:close() end
     end
     self:rebuild()
+    self:takePower()
     self:scheduleTick()
 end
 
@@ -148,6 +151,10 @@ function Dashboard:onShow()
 end
 
 function Dashboard:reportReady()
+    if self.power_failed then
+        self:onClose()
+        return
+    end
     self:writeRotation()
     UIManager:forceRePaint()
     UIManager:waitForVSync()
@@ -209,14 +216,14 @@ function Dashboard:pollCommand()
         elseif cmd == "weather ready" then
             if self.next_fetch_at == math.huge then self:refreshWeather() end
         elseif cmd == "close" then
+            if id then self.after_close = function() self:ackCommand(id, true) end end
             self:onClose()
-            if id then self:ackCommand(id, true) end
             return
         elseif cmd == "quit" or cmd == "restart" then
             -- quit: clean exit (menu > Exit), koreader.sh restores the Kindle UI (slow).
             -- restart: exit code 85, koreader.sh just relaunches KOReader (fast; used by deploy).
+            self.after_close = cmd == "quit" and UIManager.quit or UIManager.restartKOReader
             self:onClose()
-            if cmd == "quit" then UIManager:quit() else UIManager:restartKOReader() end
             return
         elseif cmd:match("^page [1-4]$") then
             self.page, self.show_settings = tonumber(cmd:sub(6)), nil
@@ -239,10 +246,30 @@ function Dashboard:pollCommand()
     UIManager:scheduleIn(1, self._poll)
 end
 
-function Dashboard:keepAwake(on)
-    if Device:isKindle() then
-        os.execute("lipc-set-prop com.lab126.powerd preventScreenSaver " .. (on and "1" or "0"))
-    end
+local function commandOK(rc)
+    return rc == 0 or rc == true
+end
+
+local function setPowerProperty(service, property, value)
+    local rc = os.execute("timeout -s KILL 3 lipc-set-prop com.lab126." .. service .. " " .. property .. " " .. value)
+    if commandOK(rc) then return true end
+    logger.warn("deskdash: failed to set", property, value, rc)
+    return false
+end
+
+local function getPowerProperty(service, property)
+    local p = io.popen("timeout -s KILL 3 lipc-get-prop com.lab126." .. service .. " " .. property .. " 2>/dev/null")
+    if not p then return end
+    local value = p:read("*l")
+    p:close()
+    return value
+end
+
+-- Keeps the stock powerd from suspending by itself; the dashboard does its own rtcwake cycles. KOReader's
+-- autosuspend plugin is disabled by main.lua (this Kindle is only a wall clock), so there's nothing else to hand over.
+function Dashboard:takePower()
+    if not Device:isKindle() then return end
+    self.power_failed = not setPowerProperty("powerd", "preventScreenSaver", 1)
 end
 
 -- ---------------------------------------------------------------- data
@@ -261,6 +288,7 @@ function Dashboard:refreshWeather(manual)
         return
     end
     job.pid = pid
+    job.deadline = time.now() + WEATHER_TIMEOUT
     self.weather_job = job
     UIManager:scheduleIn(0.25, self._check_weather)
 end
@@ -295,24 +323,30 @@ function Dashboard:finishWeather(job, result)
     if job.ack then self:ackCommand(job.ack, self.page_ok) end
 end
 
+local function discardWeather(pid)
+    if not WeatherJob.take(pid, true) then UIManager:scheduleIn(0.25, discardWeather, pid) end
+end
+
 function Dashboard:checkWeather()
     local job = self.weather_job
     if not job then return end
     local done, result = WeatherJob.take(job.pid)
-    if not done then
+    if not done and time.now() < job.deadline then
         UIManager:scheduleIn(0.25, self._check_weather)
         return
     end
     self.weather_job = nil
-    if not result then logger.warn("deskdash: weather worker returned no result") end
+    if not done then
+        logger.warn("deskdash: weather worker timed out")
+        WeatherJob.cancel(job.pid)
+        discardWeather(job.pid)
+    elseif not result then
+        logger.warn("deskdash: weather worker returned no result")
+    end
     Bench.mark(self.wake_sample, "weather_wait")
     self:finishWeather(job, result)
-    if self:canSleep() then
-        Bench.mark(self.wake_sample, "weather_redraw")
-        UIManager:nextTick(self._sleep)
-    else
-        self.wake_sample = nil
-    end
+    Bench.mark(self.wake_sample, "weather_redraw")
+    self:finishWake()
 end
 
 -- Battery mode switches Wi-Fi off between weather fetches (it otherwise reassociates at every minute wake).
@@ -320,14 +354,10 @@ end
 function Dashboard:setWifi(on)
     if not Device:isKindle() then return end
     if on and self.wifi_off then
-        self.wifi_off = nil
-        os.execute("lipc-set-prop com.lab126.cmd wirelessEnable 1")
+        if setPowerProperty("cmd", "wirelessEnable", 1) then self.wifi_off = nil end
     elseif not on and not self.wifi_off then
-        local p = io.popen("lipc-get-prop com.lab126.cmd wirelessEnable 2>/dev/null")
-        local v = p and p:read("*l"); if p then p:close() end
-        if v == "1" then
+        if getPowerProperty("cmd", "wirelessEnable") == "1" and setPowerProperty("cmd", "wirelessEnable", 0) then
             self.wifi_off = true
-            os.execute("lipc-set-prop com.lab126.cmd wirelessEnable 0")
         end
     end
 end
@@ -458,6 +488,7 @@ function Dashboard:powerTick()
     local ac = self:onExternalPower()
     if ac ~= self.pw.ac then
         self.pw.ac = ac
+        self.suspend_failures = nil
         self:logPower(ac and "plug" or "unplug")
     elseif os.date("!%M", self:localNow()) == "00" then
         self:logPower("hour")
@@ -843,10 +874,19 @@ function Dashboard:pageDetails()
     return g
 end
 
--- Low-battery warning in the bottom-left corner, level with the page dots (only on battery, at <= LOW_BATTERY %).
+-- Battery percentage on pages 2–4; page 1 only shows the low-battery warning.
 function Dashboard:batteryBadge()
     local pct = self.demo and 15 or (Device:isKindle() and self:batteryLevel())
-    if not self.demo and (not pct or pct > LOW_BATTERY or self:onExternalPower()) then return nil end
+    if not pct then return nil end
+    local low = self.demo or (pct <= LOW_BATTERY and not self:onExternalPower())
+    if not low then
+        if self.page == 1 then return nil end
+        local I = Weather.ICON
+        local icon = pct > 87 and I.battery_full or pct > 62 and I.battery_three_quarters
+            or pct > 37 and I.battery_half or pct > 12 and I.battery_low or I.battery_empty
+        return HorizontalGroup:new{ align = "center", overlap_offset = { 40, self.H - 96 },
+            txt(icon, ICONS, 30, GRAY), hspan(24), txt(pct .. "%", SANS, 34, GRAY) }
+    end
     local I = Weather.ICON
     return HorizontalGroup:new{ align = "center", overlap_offset = { 40, self.H - 96 },
         txt(pct <= 5 and I.battery_empty or I.battery_low, ICONS, 40), hspan(24),
@@ -908,17 +948,18 @@ function Dashboard:onTick()
     Bench.add(self.pw.stats, "refresh." .. mode, 1)
     self:redraw(mode)
     self:scheduleTick()
-    if self:canSleep() then
-        self.wake_sample = sample
-        Bench.mark(sample, "build")
-        if self.weather_job then
-            if sample then sample.kind = "weather_wake" end
-        else
-            UIManager:nextTick(self._sleep)
-        end
-    else
+    self.wake_sample = sample
+    Bench.mark(sample, "build")
+    if self.weather_job and sample then sample.kind = "weather_wake" end
+    self:finishWake()
+end
+
+function Dashboard:finishWake()
+    if not self:canSleep() then
         self.wake_sample = nil
         self:restore()   -- staying awake (e.g. charger plugged in): undo the battery-mode light/Wi-Fi off
+    elseif not self.weather_job then
+        UIManager:nextTick(self._sleep)
     end
 end
 
@@ -950,7 +991,6 @@ function Dashboard:sleepUntilNextMinute()
     if self.force_sleep and exists(STAY_AWAKE_FLAG) then secs = 6 end
     self.force_sleep = nil
     if secs < 5 then return end   -- too close to the minute; the regular tick handles it
-    local target = os.time() + secs
     UIManager:unschedule(self._tick)
     -- Paint now and let the e-ink refresh finish (an interrupted refresh leaves ghosting).
     UIManager:forceRePaint()
@@ -980,16 +1020,40 @@ function Dashboard:sleepUntilNextMinute()
     -- unlocks it whenever the dashboard stays awake. Locked also measured ~0.5 mA lower in suspend.
     self:setTouch(false)
     -- time.now() is monotonic (stops while suspended), so suspend_resume_awake is only the awake part of rtcwake.
-    local rc = os.execute(string.format("rtcwake -d %s -m mem -s %d >/dev/null 2>&1", RTC, secs))
+    local was_on_ac = self.pw.ac
+    local wall_start, awake_start = os.time(), time.now()
+    local rc = os.execute(string.format("rtcwake -d %s -m mem -s %d >/dev/null 2>%s", RTC, secs, RTC_ERROR))
+    local elapsed = os.time() - wall_start
+    local early = secs - elapsed
+    local slept = elapsed - time.to_number(time.since(awake_start))
     Bench.mark(sample, "suspend_resume_awake")
     Bench.finish(sample, self.pw.stats)
     self.resumed_at = time.now()
-    if rc ~= 0 and rc ~= true then Bench.add(self.pw.stats, "suspend.failed", 1) end
-    local early = target - os.time()
+    -- A successful return can still mean an immediate kernel wake. Allow for the wall clock's one-second resolution.
+    local failed = not commandOK(rc)
+    if failed or (early > 2 and slept < 1 and was_on_ac == self:onExternalPower()) then
+        Bench.add(self.pw.stats, "suspend.failed", 1)
+        self.suspend_failures = (self.suspend_failures or 0) + 1
+        if failed then
+            logger.warn("deskdash: rtcwake failed", rc, readFile(RTC_ERROR) or "")
+        else
+            logger.warn("deskdash: rtcwake returned without sustained sleep")
+        end
+        self:setTouch(true)
+        if self.suspend_failures >= SUSPEND_FAILURE_LIMIT then
+            logger.warn("deskdash: closing dashboard after repeated suspend failures")
+            self.power_failed = true
+            self:onClose()
+        else
+            self:scheduleTick()
+        end
+        return
+    end
+    self.suspend_failures = nil
     self.pw.wakes = self.pw.wakes + 1
     if early > 2 then
         self.pw.early = self.pw.early + 1
-        -- woken before the alarm: power button (or suspend refused) -> stay interactive for a while
+        -- Woken before the alarm (e.g. power button or USB) -> stay interactive for a while.
         logger.info("deskdash: woke", early, "s early")
         self:restore()
         self.last_touch = os.time()
@@ -1004,8 +1068,9 @@ function Dashboard:setTouch(on)
     if not Device:isKindle() or (not on) == (self.touch_locked or false) then return end
     local f = io.open("/proc/touch", "w")
     if not f then return end
-    f:write(on and "unlock" or "lock"); f:close()
-    self.touch_locked = not on or nil
+    local written = f:write(on and "unlock" or "lock")
+    local closed = f:close()
+    if written and closed then self.touch_locked = not on or nil end
 end
 
 function Dashboard:restore()
@@ -1019,6 +1084,7 @@ end
 
 function Dashboard:onSwipe(_, ges)
     self.last_touch = os.time()
+    self.suspend_failures = nil
     if self.show_settings then return true end
     local dir = ges.direction
     if dir == "west" or dir == "east" then
@@ -1040,6 +1106,7 @@ end
 
 function Dashboard:onTap(_, ges)
     self.last_touch = os.time()
+    self.suspend_failures = nil
     local pos = ges and ges.pos
     if pos and self.show_settings then
         self:onSettingsTap(pos)
@@ -1056,15 +1123,8 @@ function Dashboard:onTap(_, ges)
 end
 
 function Dashboard:onClose()
-    self:logPower("close")
-    self:restore()
-    self:keepAwake(false)
     UIManager:close(self, "full")
     return true
-end
-
-local function discardWeather(pid)
-    if not WeatherJob.take(pid) then UIManager:scheduleIn(0.25, discardWeather, pid) end
 end
 
 function Dashboard:onCloseWidget()
@@ -1081,8 +1141,13 @@ function Dashboard:onCloseWidget()
         discardWeather(job.pid)
         if job.ack then writeCommandAck(job.ack, false) end
     end
+    self:logPower("close")
+    self:restore()
     os.remove(ROTATION_FILE)
     if Screen:getRotationMode() ~= self.previous_rotation then Screen:setRotationMode(self.previous_rotation) end
+    if Device:isKindle() then setPowerProperty("powerd", "preventScreenSaver", 0) end
+    self.on_closed(self)
+    if self.after_close then UIManager:nextTick(self.after_close, UIManager) end
 end
 
 return Dashboard

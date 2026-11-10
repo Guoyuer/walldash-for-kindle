@@ -12,7 +12,7 @@ local PATH = "/tmp/deskdash_weather."
 local function waitForWifi()
     local deadline = time.now() + time.s(30)
     repeat
-        local p = io.popen("lipc-get-prop com.lab126.wifid cmState 2>/dev/null")
+        local p = io.popen("timeout -s KILL 3 lipc-get-prop com.lab126.wifid cmState 2>/dev/null")
         local state = p and p:read("*l")
         if p then p:close() end
         if state == "CONNECTED" then return true end
@@ -78,9 +78,15 @@ function Job.start(opts)
 end
 
 -- Read only after the child has exited. A temporary file avoids pipe-buffer stalls.
-function Job.take(pid)
+function Job.take(pid, discard)
     if not ffiutil.isSubProcessDone(pid) then return false end
     local path = PATH .. pid
+    if discard then
+        os.remove(path)
+        -- A cancelled worker may have left one file for each of its four parallel requests.
+        for i = 1, 4 do os.remove(path .. ".http." .. i) end
+        return true
+    end
     local file = io.open(path, "rb")
     if not file then return true end
     local encoded = file:read("*a")
