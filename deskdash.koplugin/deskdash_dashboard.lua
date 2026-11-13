@@ -757,7 +757,7 @@ function Dashboard:pageNow()
 end
 
 function Dashboard:pageHourly()
-    local g = self:header("HOURLY FORECAST")
+    local g = VerticalGroup:new{ align = "center" }
     local h = self.data and self.data.hourly
     if not h then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local now = self:localNow()
@@ -775,10 +775,11 @@ local BLEND_HOURS = 4     -- the current temperature's offset from the forecast 
 function Dashboard:hourlyChart(h, first)
     local wide, W = self.landscape, self.W
     local n = math.min(CHART_HOURS, #h.time - first)   -- hourlyPrecipChance reads i + 1
-    local S = wide and { icon_h = 76, icon = 52, label_h = 48, curve_h = 250, temp = 36, axis_h = 52, axis = 32,
-                         gap = 26, title_h = 40, title = 26, bar_label_h = 46, bar_h = 110, pct = 28 }
-                   or { icon_h = 100, icon = 66, label_h = 58, curve_h = 380, temp = 42, axis_h = 64, axis = 36,
-                         gap = 44, title_h = 50, title = 30, bar_label_h = 58, bar_h = 200, pct = 32 }
+    -- Sizes for reading across a room; curve_h and bar_h are fallbacks, the chart normally fills body_h.
+    local S = wide and { icon_h = 84, icon = 60, label_h = 62, curve_h = 250, temp = 46, axis_h = 54, axis = 34,
+                         gap = 22, title_h = 40, title = 26, bar_label_h = 54, bar_h = 110, pct = 36 }
+                   or { icon_h = 108, icon = 76, label_h = 80, curve_h = 380, temp = 58, axis_h = 64, axis = 40,
+                         gap = 36, title_h = 50, title = 30, bar_label_h = 64, bar_h = 200, pct = 42 }
     local margin = wide and 90 or 56
     local inner = wide and 50 or 46   -- half a label: the first and last points sit this far inside the margins
     local x0, x1 = margin + inner, W - margin - inner
@@ -803,6 +804,18 @@ function Dashboard:hourlyChart(h, first)
     local _, now_icon = self:currentConditions()
     icons[0] = now_icon
 
+    -- Fill the space between the page title and the footer (self.body_h): the fixed rows keep their size, the curve
+    -- and the bars share the rest.
+    local fixed = S.icon_h + S.label_h + 10 + S.axis_h + S.gap + S.title_h
+    if self.body_h then
+        if any_precip then
+            local flex = self.body_h - fixed - S.bar_label_h - 4
+            S.curve_h = math.floor(flex * 0.62)
+            S.bar_h = flex - S.curve_h
+        else
+            S.curve_h = self.body_h - fixed - 20
+        end
+    end
     local icon_top = 0
     local curve_top = icon_top + S.icon_h + S.label_h
     local curve_bottom = curve_top + S.curve_h
@@ -820,8 +833,10 @@ function Dashboard:hourlyChart(h, first)
         if k % LABEL_EVERY == 0 or k == n - 1 then cx[#cx + 1], cy[#cy + 1] = k + 1, temps[k + 1] end
     end
     local f = Curve.monotone(cy, cx)
-    -- At least 10 °C (18 °F) of height, so a steady day looks flat instead of a cliff.
-    local lo, hi = Curve.range(temps, self.settings.units == "imperial" and 18 or 10)
+    -- At least 6 °C (11 °F) of height, so a steady day doesn't look like a cliff. The extra height goes below the
+    -- curve (into the fill), so the warmest point stays just under the icons instead of leaving a gap there.
+    local lo, hi = Curve.range(temps)
+    lo = math.min(lo, hi - (self.settings.units == "imperial" and 11 or 6))
     local function yAt(v) return curve_bottom - 18 - (v - lo) / (hi - lo) * (S.curve_h - 36) end
     local midnights = {}
     for k = 1, n - 1 do
@@ -831,9 +846,9 @@ function Dashboard:hourlyChart(h, first)
     local og = OverlapGroup:new{ dimen = Geom:new{ w = W, h = total_h } }
     local line_w = wide and 4 or 5
     table.insert(og, Canvas:new{ w = W, h = total_h, draw = function(bb, x, y)
-        -- midnight lines behind everything
+        -- midnight: a short tick across the baseline down to the axis, where the day's name stands
         for _, k in ipairs(midnights) do
-            bb:paintRect(x + math.floor(xAt(k)), y + curve_top - S.label_h + 8, 2, axis_top - curve_top + S.label_h - 8, LIGHT)
+            bb:paintRect(x + math.floor(xAt(k)), y + curve_bottom - 24, 3, 24 + 10 + S.axis_h - 12, GRAY)
         end
         -- fill and curve, one pixel column at a time
         local last_x = math.floor(xAt(n - 1))
@@ -868,10 +883,24 @@ function Dashboard:hourlyChart(h, first)
         end
     end })
 
+    -- Midnight's day name goes on the time axis just right of its tick, replacing a clock label it would overlap.
+    -- Within an hour of "Now" there's no room on the axis: it sits on the fill just above the baseline instead.
+    local now_label = txt(self:tr("Now"), BOLD, S.axis)
+    local now_right = x0 + now_label:getSize().w / 2
+    local days = {}   -- { left, right } of day names on the axis
     local weekday_format = self.settings.language == "zh" and "!%A" or "!%a"
     for _, k in ipairs(midnights) do
-        local day = txt(self:tr(os.date(weekday_format, times[k])), BOLD, S.axis - 6, GRAY)
-        day.overlap_offset = { math.floor(xAt(k)) + 10, curve_top - S.label_h + 6 }
+        local name = self:tr(os.date(weekday_format, times[k]))
+        local left = math.floor(xAt(k)) + 12
+        local day = txt(name, BOLD, S.axis)
+        if left < now_right + 10 then
+            day:free()
+            day = txt(name, BOLD, S.axis - 8, GRAY)
+            day.overlap_offset = { left, curve_bottom - day:getSize().h - 6 }
+        else
+            day.overlap_offset = { left, axis_top + 6 }
+            days[#days + 1] = { left = left, right = left + day:getSize().w }
+        end
         table.insert(og, day)
     end
     local clock_24h = self.settings.clock_24h
@@ -887,9 +916,17 @@ function Dashboard:hourlyChart(h, first)
             peak = math.min(peak, yAt(f(1 + at)))
         end
         place(og, temp, x, peak - temp:getSize().h - 10, W)
-        local label = k == 0 and self:tr("Now")
-            or clock_24h and os.date("!%H:%M", times[k]) or (os.date("!%I %p", times[k]):gsub("^0", ""))
-        place(og, txt(label, k == 0 and BOLD or SANS, S.axis, k == 0 and BLACK or GRAY), x, axis_top + 6, W)
+        if k == 0 then
+            place(og, now_label, x, axis_top + 6, W)
+        else
+            local label = txt(clock_24h and os.date("!%H:%M", times[k]) or (os.date("!%I %p", times[k]):gsub("^0", "")),
+                SANS, S.axis, GRAY)
+            local half, clash = label:getSize().w / 2, false
+            for _, d in ipairs(days) do
+                if x - half < d.right + 10 and x + half > d.left - 10 then clash = true end
+            end
+            if clash then label:free() else place(og, label, x, axis_top + 6, W) end
+        end
         -- One row of numbers above the bars, aligned with the time axis: the highest chance in each 3-hour block
         -- (so a peak between two labels isn't missed); blank below PRECIP_LABEL_MIN.
         local block = 0
@@ -928,7 +965,7 @@ function Dashboard:rangeBar(w, lo, hi, min_all, max_all, now_t)
 end
 
 function Dashboard:pageDaily()
-    local g = self:header("7-DAY FORECAST")
+    local g = VerticalGroup:new{ align = "center" }
     local d = self.data and self.data.daily
     if not d then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local first, is_today = Weather.firstForecastDay(d, self:localNow())
@@ -983,7 +1020,7 @@ function Dashboard:tile(icon, label, value, sub, w, h)
 end
 
 function Dashboard:pageDetails()
-    local g = self:header("DETAILS")
+    local g = VerticalGroup:new{ align = "center" }
     local d = self.data
     if not d then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local W, c, day, I = Weather, d.current, d.daily, Weather.ICON
@@ -1066,8 +1103,18 @@ function Dashboard:batteryBadge()
         txt(pct .. "%  " .. self:tr("Charge me"), BOLD, 34) }
 end
 
+local PAGE_TITLES = { nil, "HOURLY FORECAST", "7-DAY FORECAST", "DETAILS" }
+
 function Dashboard:rebuild()
     local builders = { self.pageNow, self.pageHourly, self.pageDaily, self.pageDetails }
+    -- Pages 2-4: the title sits at the same height on every page; the content is centred in the space below it
+    -- (body_h, down to the footer), which the hourly chart fills.
+    local header, header_h
+    if self.page ~= 1 then
+        header = self:header(PAGE_TITLES[self.page])
+        header_h = header:getSize().h
+        self.body_h = self.H - header_h - FOOTER_H - FOOTER_BOTTOM - 10
+    end
     local ok, content = pcall(builders[self.page], self)
     self.page_ok = ok
     if not ok then
@@ -1075,10 +1122,17 @@ function Dashboard:rebuild()
         content = VerticalGroup:new{ align = "center", vspan(350), txt(self:tr("Something went wrong"), BOLD, 56),
             txt(tostring(content):sub(1, 60), SANS, 28, GRAY, self.W - 80) }
     end
-    local page = OverlapGroup:new{ dimen = Geom:new{ w = self.W, h = self.H },
-        CenterContainer:new{ dimen = Geom:new{ w = self.W, h = self.H - (self.page == 1 and 88 or 120) }, ignore_if_over = "height",
-            VerticalGroup:new{ align = "center", content } },
-    }
+    local page = OverlapGroup:new{ dimen = Geom:new{ w = self.W, h = self.H } }
+    if header then
+        table.insert(page, box(self.W, header_h, header))
+        local body = CenterContainer:new{ dimen = Geom:new{ w = self.W, h = self.body_h }, ignore_if_over = "height",
+            VerticalGroup:new{ align = "center", content } }
+        body.overlap_offset = { 0, header_h }
+        table.insert(page, body)
+    else
+        table.insert(page, CenterContainer:new{ dimen = Geom:new{ w = self.W, h = self.H - 88 }, ignore_if_over = "height",
+            VerticalGroup:new{ align = "center", content } })
+    end
     if self.page ~= 1 then table.insert(page, self:footer()) end
     local badge = self:batteryBadge()
     if badge then table.insert(page, badge) end
