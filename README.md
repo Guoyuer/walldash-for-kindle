@@ -6,7 +6,7 @@
 
 | 目录 | 作用 |
 |---|---|
-| `deskdash.koplugin/` | KOReader 插件：4 页仪表盘（现在 / 逐小时 / 7 天 / 详情），逐小时和 7 天预报优先用 Open-Meteo 的 NBM，首页降水提示复用小时预报，实况天况和预警来自 NWS |
+| `deskdash.koplugin/` | KOReader 插件：4 页仪表盘（现在 / 逐小时 / 7 天 / 详情），逐小时页是未来 24 小时的温度曲线和降水概率柱，逐小时和 7 天预报优先用 Open-Meteo 的 NBM，首页降水提示优先用 15 分钟临近预报（如“约 25 分钟后有雨”），没有时再看小时预报，实况天况和预警来自 NWS |
 | `kdev/` | Kindle 端调试：`sshd.sh`（用 Jobman 自带的 dropbear 起一个只允许密钥登录的 SSH，仅限局域网）、`authorized_keys` |
 | `docs/` | `weather-accuracy.md`：各天气数据源准确度调研（7 天实测对比，`tools/verify_forecast.py` 可复现） |
 | `tools/` | 电脑端：`kctl.py`（命令 / 截图 / 推送，走 SSH）、`deploy_dash.sh`（部署插件，出错自动回滚）、`check.sh`（本地检查 + 测试） |

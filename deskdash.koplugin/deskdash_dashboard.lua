@@ -20,12 +20,14 @@ local TextWidget = require("ui/widget/textwidget")
 local UIManager = require("ui/uimanager")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
+local Widget = require("ui/widget/widget")
 local logger = require("logger")
 local time = require("ui/time")
 local Weather = require("deskdash_weather")
 local Bench = require("deskdash_benchmark")
 local WeatherJob = require("deskdash_weather_job")
 local Chinese = require("deskdash_chinese")
+local Curve = require("deskdash_curve")
 local parseWallTime = Weather.parseWallTime
 local Screen = Device.screen
 
@@ -34,6 +36,7 @@ local WHITE = Blitbuffer.COLOR_WHITE
 -- E-ink contrast is low: keep "secondary" text dark and rules/tracks clearly visible.
 local GRAY = Blitbuffer.Color8(0x33)   -- secondary text
 local LIGHT = Blitbuffer.Color8(0x99)  -- separators, range-bar track
+local FILL = Blitbuffer.Color8(0xCC)   -- area under the hourly temperature curve
 
 local SANS, BOLD, ICONS = "NotoSans-Regular.ttf", "NotoSans-Bold.ttf", "nerdfonts/symbols.ttf"
 local HEAVY = BOLD   -- big numerals (KOReader can't see the Kindle's Amazon Ember)
@@ -108,6 +111,21 @@ local function fixed(w, h, widget)
     return og
 end
 local function deg(v) return v and string.format("%d°", math.floor(v + 0.5)) or "--" end
+
+-- A widget that paints itself with draw(bb, x, y) (Blitbuffer has rectangles and circles but no lines).
+local Canvas = Widget:extend{ w = 0, h = 0, draw = nil }
+function Canvas:getSize() return Geom:new{ w = self.w, h = self.h } end
+function Canvas:paintTo(bb, x, y)
+    self.dimen = Geom:new{ x = x, y = y, w = self.w, h = self.h }
+    self.draw(bb, x, y)
+end
+
+-- Places widget in an OverlapGroup centred on x (clamped to [0, w]) with its top at y.
+local function place(group, widget, x, y, w)
+    local ww = widget:getSize().w
+    widget.overlap_offset = { math.floor(math.max(0, math.min(w - ww, x - ww / 2))), math.floor(y) }
+    table.insert(group, widget)
+end
 
 local Dashboard = InputContainer:extend{
     covers_fullscreen = true,
@@ -657,11 +675,14 @@ function Dashboard:pageNow()
     local function fmt(at) return self:hhmm(at) end
     local alert_format, precip_format = self:tr("%s until %s"), self:tr("%s–%s · %d%% precip")
     local alert = Weather.activeAlert(self.alerts, t, fmt, alert_format)
-    local precip = d and Weather.precipSummary(d.hourly, t, fmt, precip_format)
+    local tr = function(s) return self:tr(s) end
+    -- The 15-minute nowcast when it has something to say, else the first likely-wet hour.
+    local precip = d and (Weather.nowcastText(Weather.nowcast(d.minutely, t), tr)
+        or Weather.precipSummary(d.hourly, t, fmt, precip_format))
     if self.demo then
         local midnight = t - t % 86400
         alert = string.format(alert_format, "Wind Advisory", fmt(midnight + 18 * 3600))
-        precip = string.format(precip_format, fmt(midnight + 16 * 3600), fmt(midnight + 17 * 3600), 70)
+        precip = Weather.nowcastText({ kind = "start", minutes = 25 }, tr)
     end
     local extra = (alert and 1 or 0) + (precip and 1 or 0)   -- make room for the notice lines
     -- Leave space beside the clock for the period marker in 12-hour mode.
@@ -741,37 +762,137 @@ function Dashboard:pageHourly()
     if not h then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local now = self:localNow()
     local first = Weather.firstForecastHour(h, now)
-    local last = math.min(first + 11, #h.time - 1)
-    if first > last then table.insert(g, txt(self:tr("Forecast unavailable"), SANS, 48, GRAY)); return g end
-    local wide = self.landscape
-    local rowW, rowH = wide and math.floor((self.W - 124) / 2) or self.W - 88, wide and 120 or 92
-    local timeW, iconW, precipW = wide and 230 or 280, wide and 130 or 170, wide and 130 or 180
-    local left, right = VerticalGroup:new{}, VerticalGroup:new{}
-    local left_end = wide and math.min(first + 5, last) or last
-    for i = first, last do
-        local t = parseWallTime(h.time[i])
-        local is_now = i == first and t <= now
+    if first > #h.time - 2 then table.insert(g, txt(self:tr("Forecast unavailable"), SANS, 48, GRAY)); return g end
+    table.insert(g, self:hourlyChart(h, first))
+    return g
+end
+
+-- Next 24 hours, like Apple Weather: icons every 3 h, a smooth temperature curve with the area below it filled,
+-- a time axis (a thin line at midnight) and hourly precipitation-chance bars.
+local CHART_HOURS, LABEL_EVERY = 24, 3
+function Dashboard:hourlyChart(h, first)
+    local wide, W = self.landscape, self.W
+    local n = math.min(CHART_HOURS, #h.time - first)   -- hourlyPrecipChance reads i + 1
+    local S = wide and { icon_h = 76, icon = 52, label_h = 48, curve_h = 250, temp = 36, axis_h = 52, axis = 32,
+                         gap = 26, title_h = 40, title = 26, bar_label_h = 38, bar_h = 110, pct = 28 }
+                   or { icon_h = 100, icon = 66, label_h = 58, curve_h = 380, temp = 42, axis_h = 64, axis = 36,
+                         gap = 44, title_h = 50, title = 30, bar_label_h = 46, bar_h = 200, pct = 32 }
+    local margin = wide and 90 or 56
+    local inner = wide and 50 or 46   -- half a label: the first and last points sit this far inside the margins
+    local x0, x1 = margin + inner, W - margin - inner
+    local function xAt(k) return x0 + k * (x1 - x0) / (CHART_HOURS - 1) end
+
+    local temps, times, icons, chances = {}, {}, {}, {}
+    local any_precip = false
+    for k = 0, n - 1 do
+        local i = first + k
+        times[k] = parseWallTime(h.time[i])
+        temps[k + 1] = h.temperature_2m[i]
         local _, icon = Weather.describe(h.weather_code[i], h.is_day and h.is_day[i] == 1)
-        local temperature = h.temperature_2m[i]
-        if is_now then
-            _, icon = self:currentConditions()
-            temperature = self.data.current.temperature_2m
+        icons[k] = icon
+        chances[k] = Weather.hourlyPrecipChance(h, i)
+        any_precip = any_precip or chances[k] > 0
+    end
+    -- The first point is "now": the current observation instead of the hour's forecast.
+    local _, now_icon = self:currentConditions()
+    icons[0] = now_icon
+    temps[1] = self.data.current.temperature_2m or temps[1]
+
+    local icon_top = 0
+    local curve_top = icon_top + S.icon_h + S.label_h
+    local curve_bottom = curve_top + S.curve_h
+    local axis_top = curve_bottom + 10
+    local title_top = axis_top + S.axis_h + S.gap
+    local bars_top = title_top + S.title_h + S.bar_label_h
+    local bars_bottom = bars_top + S.bar_h
+    local total_h = bars_bottom + 4
+    if not any_precip then total_h = title_top + S.title_h + 20 end
+
+    local f = Curve.monotone(temps)
+    local lo, hi = Curve.range(temps, 6)
+    local function yAt(v) return curve_bottom - 18 - (v - lo) / (hi - lo) * (S.curve_h - 36) end
+    local midnights = {}
+    for k = 1, n - 1 do
+        if os.date("!%H", times[k]) == "00" then midnights[#midnights + 1] = k end
+    end
+
+    local og = OverlapGroup:new{ dimen = Geom:new{ w = W, h = total_h } }
+    local line_w = wide and 4 or 5
+    table.insert(og, Canvas:new{ w = W, h = total_h, draw = function(bb, x, y)
+        -- midnight lines behind everything
+        for _, k in ipairs(midnights) do
+            bb:paintRect(x + math.floor(xAt(k)), y + curve_top - S.label_h + 8, 2, axis_top - curve_top + S.label_h - 8, LIGHT)
         end
-        local p = Weather.hourlyPrecipChance(h, i)
-        local label = is_now and self:tr("Now") or self:hhmm(t)
-        local column = i <= left_end and left or right
-        table.insert(column, HorizontalGroup:new{ align = "center",
-            box(timeW, rowH, txt(label, is_now and BOLD or SANS, self.settings.clock_24h and 54 or 46), "left"),
-            box(iconW, rowH, txt(icon, ICONS, 68)),
-            box(precipW, rowH, txt(p .. "%", SANS, 46, GRAY), "right"),
-            box(rowW - timeW - iconW - precipW, rowH, txt(deg(temperature), BOLD, 58), "right"),
-        })
-        if i ~= left_end and i < last then
-            table.insert(column, LineWidget:new{ dimen = Geom:new{ w = rowW, h = 2 }, background = LIGHT })
+        -- fill and curve, one pixel column at a time
+        local last_x = math.floor(xAt(n - 1))
+        local prev
+        for px = math.floor(x0), last_x do
+            local v = f(1 + (px - x0) / (x1 - x0) * (CHART_HOURS - 1))
+            local py = math.floor(yAt(v) + 0.5)
+            bb:paintRect(x + px, y + py, 1, curve_bottom - py, FILL)
+            local top, bottom = py, py
+            if prev then top, bottom = math.min(prev, py), math.max(prev, py) end
+            bb:paintRect(x + px, y + top - math.floor(line_w / 2), 1, bottom - top + line_w, BLACK)
+            prev = py
+        end
+        bb:paintRect(x + math.floor(x0), y + curve_bottom, last_x - math.floor(x0) + 1, 2, LIGHT)   -- baseline
+        -- dots on the labelled points; "now" is a white dot with a black ring
+        for k = LABEL_EVERY, n - 1, LABEL_EVERY do
+            bb:paintCircle(x + math.floor(xAt(k)), y + math.floor(yAt(temps[k + 1]) + 0.5), wide and 6 or 7, BLACK)
+        end
+        local r = wide and 11 or 13
+        local cx, cy = x + math.floor(x0), y + math.floor(yAt(temps[1]) + 0.5)
+        bb:paintCircle(cx, cy, r, WHITE)
+        bb:paintCircle(cx, cy, r, BLACK, 4)
+        if any_precip then   -- precipitation-chance bars
+            local bw = math.max(6, math.floor((x1 - x0) / (CHART_HOURS - 1) * 0.55))
+            bb:paintRect(x + math.floor(x0 - bw / 2), y + bars_bottom, last_x - math.floor(x0) + bw, 2, LIGHT)
+            for k = 0, n - 1 do
+                local bh = math.floor(chances[k] / 100 * S.bar_h + 0.5)
+                if bh > 0 then
+                    bb:paintRect(x + math.floor(xAt(k) - bw / 2), y + bars_bottom - bh, bw, bh, GRAY)
+                end
+            end
+        end
+    end })
+
+    local weekday_format = self.settings.language == "zh" and "!%A" or "!%a"
+    for _, k in ipairs(midnights) do
+        local day = txt(self:tr(os.date(weekday_format, times[k])), BOLD, S.axis - 6, GRAY)
+        day.overlap_offset = { math.floor(xAt(k)) + 10, curve_top - S.label_h + 6 }
+        table.insert(og, day)
+    end
+    local clock_24h = self.settings.clock_24h
+    for k = 0, n - 1, LABEL_EVERY do
+        local x = xAt(k)
+        place(og, txt(icons[k], ICONS, S.icon), x, icon_top + (S.icon_h - S.icon * 1.2) / 2, W)
+        -- Above the highest bit of curve under the label, so a steep neighbour doesn't run through it.
+        local temp = txt(deg(temps[k + 1]), BOLD, S.temp)
+        local half = temp:getSize().w / 2 / (x1 - x0) * (CHART_HOURS - 1)
+        local peak = math.huge
+        for s = -10, 10 do
+            local at = math.max(0, math.min(n - 1, k + s / 10 * half))
+            peak = math.min(peak, yAt(f(1 + at)))
+        end
+        place(og, temp, x, peak - temp:getSize().h - 10, W)
+        local label = k == 0 and self:tr("Now")
+            or clock_24h and os.date("!%H:%M", times[k]) or (os.date("!%I %p", times[k]):gsub("^0", ""))
+        place(og, txt(label, k == 0 and BOLD or SANS, S.axis, k == 0 and BLACK or GRAY), x, axis_top + 6, W)
+        if any_precip and chances[k] > 0 then   -- above this bar and its neighbours (the label is wider)
+            local bh = math.floor(math.max(chances[k], chances[k - 1] or 0, chances[k + 1] or 0) / 100 * S.bar_h + 0.5)
+            local pct = txt(chances[k] .. "%", SANS, S.pct, GRAY)
+            place(og, pct, x, bars_bottom - bh - pct:getSize().h - 4, W)
         end
     end
-    table.insert(g, wide and HorizontalGroup:new{ left, hspan(36), fixed(rowW, right:getSize().h, right) } or left)
-    return g
+    local title = txt(self:tr(any_precip and "CHANCE OF PRECIP" or "No precipitation in the next 24 h"),
+        BOLD, S.title, GRAY)
+    if any_precip then
+        title.overlap_offset = { margin, title_top }
+        table.insert(og, title)
+    else
+        place(og, title, W / 2, title_top, W)
+    end
+    return og
 end
 
 function Dashboard:rangeBar(w, lo, hi, min_all, max_all, now_t)

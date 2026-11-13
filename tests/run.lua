@@ -162,6 +162,74 @@ eq("rest two in head", rest("Rain and Snow"), nil)
 eq("obs unknown precip -> model", W.obsCode("Unknown Precipitation and Fog"), nil)
 eq("obs haze", W.obsCode("Haze"), 45); eq("obs unknown", W.obsCode("Funnel Cloud?"), nil); eq("obs empty", W.obsCode(""), nil)
 
+-- nowcast: 15-minute sums ending at each timestamp
+local function minutely(values, snow, unit)
+    local m = { time = {}, precipitation = values, snowfall = snow or {}, unit = unit or "mm" }
+    for i = 1, #values do
+        m.time[i] = os.date("!%Y-%m-%dT%H:%M", W.parseWallTime("2026-11-05T15:00") + (i - 1) * 900)
+    end
+    for i = 1, #values do m.snowfall[i] = m.snowfall[i] or 0 end
+    return m
+end
+local t1505 = W.parseWallTime("2026-11-05T15:05")
+local nc = W.nowcast(minutely{ 0, 0, 0, 0.1, 0.4, 0, 0 }, t1505)
+eq("nowcast start kind", nc.kind, "start")
+eq("nowcast start minutes", nc.minutes, 25)   -- wet from 15:30 (the 15:45 value covers 15:30-15:45)
+eq("nowcast rain", nc.snow, false)
+eq("nowcast text", W.nowcastText(nc), "Rain in ~25 min")
+eq("nowcast Chinese", W.nowcastText(nc, function(s) return Chinese[s] end), "约 25 分钟后有雨")
+nc = W.nowcast(minutely{ 0, 0.5, 0.2, 0, 0 }, t1505)
+eq("nowcast stop kind", nc.kind, "stop")
+eq("nowcast stop minutes", nc.minutes, 25)    -- wet until 15:30
+eq("nowcast stop text", W.nowcastText(nc), "Rain stopping in ~25 min")
+nc = W.nowcast(minutely({ 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3, 0.3 }, { 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5 }), t1505)
+eq("nowcast steady kind", nc.kind, "steady")
+eq("nowcast steady minutes", nc.minutes, 105)   -- 15:05 -> 17:00, whole quarter hours
+eq("nowcast snow", nc.snow, true)
+eq("nowcast steady text", W.nowcastText(nc), "Snow for the next 1 h 45 min")
+eq("nowcast steady Chinese", W.nowcastText(nc, function(s) return Chinese[s] end), "未来 1 小时 45 分钟持续下雪")
+eq("nowcast dry", W.nowcast(minutely{ 0, 0, 0.05, 0 }, t1505), nil)
+eq("nowcast past rain ignored", W.nowcast(minutely{ 2, 0, 0, 0 }, W.parseWallTime("2026-11-05T15:01")), nil)
+eq("nowcast expired", W.nowcast(minutely{ 1, 1 }, W.parseWallTime("2026-11-05T16:00")), nil)
+eq("nowcast missing", W.nowcast(nil, t1505), nil)
+eq("nowcast inch threshold", W.nowcast(minutely({ 0, 0, 0.004 }, nil, "inch"), t1505).minutes, 10)
+eq("nowcast inch dry", W.nowcast(minutely({ 0, 0, 0.003 }, nil, "inch"), t1505), nil)
+eq("nowcast at least 5 min", W.nowcast(minutely{ 0, 0, 0, 1 }, W.parseWallTime("2026-11-05T15:29")).minutes, 5)
+eq("duration hours", W.duration(120), "2 h")
+local nc_parsed = W.selectForecast((function()
+    local f = forecastFixture("_best_match")
+    f.minutely_15 = { time = { "2026-11-05T15:00" }, precipitation_best_match = { 0.2 },
+        precipitation_ncep_nbm_conus = { 0 }, snowfall_best_match = { 0.1 } }
+    f.minutely_15_units = { precipitation_best_match = "inch" }
+    return f
+end)())
+eq("minutely uses best_match", nc_parsed.minutely.precipitation[1], 0.2)
+eq("minutely snowfall", nc_parsed.minutely.snowfall[1], 0.1)
+eq("minutely unit", nc_parsed.minutely.unit, "inch")
+eq("missing minutely is nil", nbm.minutely, nil)
+
+-- monotone curve
+local Curve = require("deskdash_curve")
+local ys = { 10, 12, 15, 15, 11, 8, 9, 14 }
+local f = Curve.monotone(ys)
+local through, bounded = true, true
+for k = 1, #ys do through = through and math.abs(f(k) - ys[k]) < 1e-9 end
+for k = 1, #ys - 1 do
+    local lo, hi = math.min(ys[k], ys[k + 1]), math.max(ys[k], ys[k + 1])
+    for s = 1, 19 do
+        local y = f(k + s / 20)
+        bounded = bounded and y >= lo - 1e-9 and y <= hi + 1e-9
+    end
+end
+eq("curve passes through points", through, true)
+eq("curve stays between neighbours", bounded, true)
+eq("curve flat segment", f(3.5), 15)
+eq("curve single point", Curve.monotone({ 7 })(1), 7)
+local lo, hi = Curve.range({ 10, 11 }, 4)
+eq("range widened", lo .. "," .. hi, "8.5,12.5")
+lo, hi = Curve.range({ 2, 20 }, 4)
+eq("range kept", lo .. "," .. hi, "2,20")
+
 -- small helpers
 eq("aqi good", W.aqiLevel(50), "Good"); eq("aqi moderate", W.aqiLevel(51), "Moderate")
 eq("aqi hazardous", W.aqiLevel(400), "Hazardous")

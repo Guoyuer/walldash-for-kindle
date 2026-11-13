@@ -116,6 +116,12 @@ local CURRENT = { "temperature_2m", "apparent_temperature", "relative_humidity_2
     "weather_code", "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m", "is_day" }
 local HOURLY = { "temperature_2m", "weather_code", "precipitation_probability", "is_day" }
 local DAILY = { "weather_code", "temperature_2m_max", "temperature_2m_min", "precipitation_sum" }
+-- 15-minute precipitation for the nowcast. Each value is the sum over the 15 minutes ending at its timestamp.
+-- best_match is NOAA RRFS in North America (native 15-minute output); NBM's 15-minute values are interpolated from
+-- its hourly ones, so the nowcast always uses best_match.
+local MINUTELY = { "precipitation" }
+local MINUTELY_STEPS = 13   -- the first step has usually ended already; 12 more = 3 h (battery fetches hourly)
+local HOURLY_STEPS = 27     -- the hourly chart's 24 h + its precipitation (i + 1) + 1 h of cache age + 1
 local DEFAULT_MODEL, NBM = "_best_match", "_ncep_nbm_conus"
 
 local function forecastSection(section, fields, suffix)
@@ -172,8 +178,18 @@ function Weather.selectForecast(t)
         local value = source[field]
         if type(value) == "number" then current[field] = value end
     end
+    local minutely = forecastSection(t.minutely_15, MINUTELY, suffix)
+    if minutely then
+        local snow = t.minutely_15["snowfall" .. suffix]
+        minutely.snowfall = {}
+        for i = 1, #minutely.time do
+            minutely.snowfall[i] = type(snow) == "table" and type(snow[i]) == "number" and snow[i] or 0
+        end
+        local munits = type(t.minutely_15_units) == "table" and t.minutely_15_units or {}
+        minutely.unit = munits["precipitation" .. suffix] == "inch" and "inch" or "mm"
+    end
     return {
-        hourly = hourly, daily = daily, current = current,
+        hourly = hourly, daily = daily, current = current, minutely = minutely,
         daily_units = { precipitation_sum = type(precipitation_unit) == "string" and precipitation_unit or nil },
         current_units = { wind_speed_10m = type(wind_unit) == "string" and wind_unit or nil },
         utc_offset_seconds = type(t.utc_offset_seconds) == "number" and t.utc_offset_seconds or nil,
@@ -186,8 +202,9 @@ function Weather.forecastRequest(lat, lon, units)
         .. "&current=" .. table.concat(CURRENT, ",")
         .. "&hourly=" .. table.concat(HOURLY, ",")
         .. "&daily=" .. table.concat(DAILY, ",") .. ",sunrise,sunset,uv_index_max"
+        .. "&minutely_15=" .. table.concat(MINUTELY, ",") .. ",snowfall&forecast_minutely_15=" .. MINUTELY_STEPS
         .. "&models=best_match,ncep_nbm_conus"
-        .. "&timezone=auto&forecast_days=7&forecast_hours=13%s",
+        .. "&timezone=auto&forecast_days=7&forecast_hours=" .. HOURLY_STEPS .. "%s",
         lat, lon, units == "imperial" and "&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch" or "") }
 end
 
@@ -411,6 +428,65 @@ function Weather.precipSummary(h, now, fmt, template)
             return string.format(template or "%s–%s · %d%% precip", fmt(starts), fmt(parseWallTime(h.time[i + 1])), p)
         end
     end
+end
+
+--- 15-minute precipitation ({ time, precipitation, snowfall, unit }) -> what happens next at "local" epoch now, or nil
+--- when it stays dry: { kind = "start" | "stop" | "steady", minutes = n, snow = bool }. start: dry now, wet in n
+--- minutes; stop: wet now, dry in n minutes; steady: wet for the rest of the window (n minutes, whole quarter hours).
+--- Values are sums over the 15 minutes ending at their timestamp; >= 0.1 mm in 15 minutes counts as wet.
+local NOWCAST_MM = 0.1
+function Weather.nowcast(m, now)
+    if not (m and m.time) then return nil end
+    local inch = m.unit == "inch"
+    local threshold = (inch and NOWCAST_MM / 25.4 or NOWCAST_MM) * 0.99   -- the API rounds the amounts
+    local ends, wet, first = {}, {}, nil
+    for i = 1, #m.time do
+        ends[i] = parseWallTime(m.time[i])
+        wet[i] = m.precipitation[i] >= threshold
+        if not first and ends[i] > now then first = i end
+    end
+    if not first then return nil end
+    -- Snow when most of the run's water fell as snow (7 cm of snow ~ 10 mm of water; 7 inch ~ 1 inch).
+    local function snowy(from)
+        local water, snow_water = 0, 0
+        for i = from, #m.time do
+            if not wet[i] then break end
+            water = water + m.precipitation[i]
+            snow_water = snow_water + (m.snowfall[i] or 0) * (inch and 1 / 7 or 10 / 7)
+        end
+        return snow_water >= water / 2
+    end
+    local function round5(seconds) return math.max(5, math.floor(seconds / 300 + 0.5) * 5) end
+    if wet[first] then
+        for i = first + 1, #m.time do
+            if not wet[i] then return { kind = "stop", minutes = round5(ends[i - 1] - now), snow = snowy(first) } end
+        end
+        local left = math.floor((ends[#m.time] - now) / 900) * 15
+        return left >= 15 and { kind = "steady", minutes = left, snow = snowy(first) } or nil
+    end
+    for i = first + 1, #m.time do
+        if wet[i] then return { kind = "start", minutes = round5(ends[i] - 900 - now), snow = snowy(i) } end
+    end
+end
+
+--- "25 min", "1 h 30 min", "2 h"; tr translates the templates.
+function Weather.duration(minutes, tr)
+    tr = tr or function(s) return s end
+    if minutes < 60 then return string.format(tr("%d min"), minutes) end
+    local h, m = math.floor(minutes / 60), minutes % 60
+    if m == 0 then return string.format(tr("%d h"), h) end
+    return string.format(tr("%d h %d min"), h, m)
+end
+
+local NOWCAST_TEXT = {
+    start = { "Rain in ~%s", "Snow in ~%s" },
+    stop = { "Rain stopping in ~%s", "Snow stopping in ~%s" },
+    steady = { "Rain for the next %s", "Snow for the next %s" },
+}
+function Weather.nowcastText(nc, tr)
+    if not nc then return nil end
+    tr = tr or function(s) return s end
+    return string.format(tr(NOWCAST_TEXT[nc.kind][nc.snow and 2 or 1]), Weather.duration(nc.minutes, tr))
 end
 
 --- Most severe alert that hasn't ended at "local" epoch now, e.g. "Wind Advisory until 18:00", or nil.
