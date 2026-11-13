@@ -81,15 +81,17 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   Weather glyphs from KOReader's `nerdfonts/symbols.ttf`.
 - `deskdash_curve.lua`: pure chart math (Fritsch–Carlson monotone cubic, range padding), tested in `tests/run.lua`.
 - `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details).
-  Hourly = a 24 h chart (`hourlyChart`, `forecast_hours=27`): icons every 3 h, temperature curve with a gray
-  fill, time axis with a midnight line, hourly precipitation-chance bars. Drawn by a `Canvas` widget (Blitbuffer
+  Hourly = a 24 h chart (`hourlyChart`, `forecast_hours=27`): icons every 3 h but only where the weather changes,
+  temperature curve with a gray fill (the current temperature's offset from the forecast fades out over 4 h; at
+  least 10 °C / 18 °F of height), time axis counted from "Now" with the new day's name at the midnight line,
+  hourly precipitation-chance bars (< 20 % not drawn, only the highest one numbered). Drawn by a `Canvas` widget (Blitbuffer
   has no line primitive: the curve is 1 px `paintRect` columns), labels via `OverlapGroup` offsets. Swipe = page,
   tap = refresh, long-press = close. Ticks on each minute; weather at fixed wall-clock slots a few minutes
   after NWS stations report: :03/:18/:33/:48 plugged in, :03 on battery (`WEATHER_STEP*`, `Weather.secondsToSlot`;
   failed automatic requests back off from 1 min to at most 15 min). The worker sends forecast, alerts, observation
   and AQI as parallel `curl`s (`Weather.curlAll`); AQI only when the cached value is ≥ 55 min old;
-  flashing full refresh every 30 min; back to page 1 after 2 min idle. Pages 2–4 have page dots and a settings gear for
-  language, clock format and orientation. Closing the dashboard restores KOReader's prior orientation.
+  flashing full refresh every 30 min; back to page 1 after 2 min idle. Pages 2–4 have no title or city; their footer has the time + battery
+  (left), page dots and a settings gear for language, clock format, units and orientation. Closing the dashboard restores KOReader's prior orientation.
   Page 1 has no city name, page dots or gear. It shows
   an alert line and a precipitation line when there is one. On battery at <= 20 % a "Charge me" badge appears bottom-left.
   Details = 8 tiles (feels like, humidity, wind, UV, precipitation, AQI, next sun event, moon).
