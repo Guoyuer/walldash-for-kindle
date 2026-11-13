@@ -78,6 +78,23 @@ end
 local function txt(text, fname, px, color, max_w)
     return TextWidget:new{ text = text, face = face(fname, px), fgcolor = color or BLACK, padding = 0, max_width = max_w }
 end
+-- Like txt(), but shrinks the font (down to min_px) to fit max_w instead of ellipsizing; truncates only below min_px.
+local function fitTxt(text, fname, px, color, max_w, min_px)
+    local w = txt(text, fname, px, color)
+    local tw = w:getSize().w
+    if tw <= max_w then return w end
+    w:free()
+    -- Glyph widths don't scale exactly linearly (hinting, point-size rounding), so step down until it fits.
+    local fit = math.max(min_px, math.floor(px * max_w / tw))
+    w = txt(text, fname, fit)
+    while fit > min_px and w:getSize().w > max_w do
+        w:free()
+        fit = math.max(min_px, fit - 2)
+        w = txt(text, fname, fit)
+    end
+    w:free()
+    return txt(text, fname, fit, color, max_w)
+end
 local function vspan(h) return VerticalSpan:new{ width = h } end
 local function hspan(w) return HorizontalSpan:new{ width = w } end
 local function box(w, h, widget, align)
@@ -164,7 +181,7 @@ function Dashboard:reportReady()
 end
 
 -- Debug/remote control: next|prev|refresh|weather ready|close|quit|restart|sleep|demo|demo off|page N|tap X Y.
--- ("demo" shows fake alert/rain/low-battery notices, to check their layout.)
+-- ("demo" shows fake alert/rain/low-battery notices and a two-line condition, to check their layout.)
 -- ("sleep" forces one battery-mode sleep even when plugged in; "restart" reloads KOReader + plugin quickly.)
 -- (KOReader grabs the touchscreen, so injected touches can't reach it.)
 local CMD_FILE = "/tmp/deskdash_cmd"
@@ -614,7 +631,9 @@ function Dashboard:currentConditions()
     local c, o = self.data.current, self.obs
     if o and o.code and os.time() - o.t < OBS_MAX_AGE then
         local label, icon = Weather.describe(o.code, c.is_day == 1)
-        return self.settings.language == "zh" and self:tr(label) or o.text, icon
+        if self.settings.language == "zh" then return self:tr(label), icon end
+        local head, rest = Weather.shortText(o.text)
+        return head, icon, rest
     end
     local label, icon = Weather.describe(c.weather_code, c.is_day == 1)
     return self:tr(label), icon
@@ -639,7 +658,7 @@ function Dashboard:pageNow()
     end
     local extra = (alert and 1 or 0) + (precip and 1 or 0)   -- make room for the notice lines
     -- Leave space beside the clock for the period marker in 12-hour mode.
-    local clock_px = wide and 244 or (self.settings.clock_24h and 400 or 350) - 30 * extra
+    local clock_px = wide and (self.settings.clock_24h and 244 or 226) or (self.settings.clock_24h and 400 or 350) - 30 * extra
     local clock = HorizontalGroup:new{ align = "bottom", txt(self:hhmm(t, true), HEAVY, clock_px) }
     if not self.settings.clock_24h then
         table.insert(clock, hspan(16))
@@ -647,13 +666,16 @@ function Dashboard:pageNow()
     end
     local clock_block = VerticalGroup:new{ align = "center", clock,
         vspan(wide and -20 or -36),   -- reclaim the clock font's blank space below the digits
-        txt(date, BOLD, wide and 58 or 82, BLACK, wide and math.floor(self.W / 2) - 56 or self.W - 64),
+        fitTxt(date, BOLD, wide and 58 or 82, BLACK, wide and math.floor(self.W / 2) - 56 or self.W - 64, wide and 40 or 56),
     }
     local weather = VerticalGroup:new{ align = "center" }
     if d then
         local c, daily = d.current, d.daily
         local day_index, is_today = Weather.firstForecastDay(daily, t)
-        local cond, icon = self:currentConditions()
+        local cond, icon, cond_rest = self:currentConditions()
+        if self.demo and self.settings.language ~= "zh" then   -- the widest real NWS text, as two lines
+            cond, cond_rest = Weather.shortText("Heavy Thunderstorms and Heavy Rain and Hail and Fog/Mist")
+        end
         local glyph = txt(icon, ICONS, wide and 174 or 246 - 20 * extra)
         -- Nerd Font weather glyphs can extend past their reported width.
         local gap = wide and 105 or 140
@@ -667,7 +689,13 @@ function Dashboard:pageNow()
         end
         table.insert(weather, HorizontalGroup:new{ align = "center", glyph, hspan(gap), temperature })
         table.insert(weather, vspan(wide and -20 or 6 - 3 * extra))
-        table.insert(weather, txt(cond, BOLD, wide and 56 or 84, BLACK, wide and math.floor(self.W / 2) - 56 or self.W - 80))
+        -- NWS observation text is split into a headline and the rest ("Light Rain" / "Fog/Mist").
+        local cond_w = wide and math.floor(self.W / 2) - 56 or self.W - 80
+        table.insert(weather, fitTxt(cond, BOLD, wide and 56 or 84, BLACK, cond_w, wide and 36 or 52))
+        if cond_rest then
+            table.insert(weather, vspan(wide and -4 or -8))
+            table.insert(weather, fitTxt(cond_rest, BOLD, wide and 34 or 50, BLACK, cond_w, wide and 26 or 36))
+        end
         table.insert(weather, vspan(8))
         local hi = is_today and daily.temperature_2m_max[day_index]
         local lo = is_today and daily.temperature_2m_min[day_index]
@@ -691,11 +719,11 @@ function Dashboard:pageNow()
     if alert or precip then table.insert(g, vspan(wide and 36 or 20)) end
     if alert then
         table.insert(g, HorizontalGroup:new{ align = "center", txt(I.warning, ICONS, 40), hspan(16),
-            txt(alert, BOLD, 40, BLACK, self.W - 160) })
+            fitTxt(alert, BOLD, 40, BLACK, self.W - 160, 30) })   -- "Tropical Cyclone Local Statement until …"
     end
     if precip then
         table.insert(g, HorizontalGroup:new{ align = "center", txt(I.umbrella, ICONS, 40, GRAY), hspan(16),
-            txt(precip, SANS, 40, GRAY, self.W - 160) })
+            fitTxt(precip, SANS, 40, GRAY, self.W - 160, 30) })
     end
     return g
 end
@@ -797,11 +825,13 @@ function Dashboard:tile(icon, label, value, sub, w, h)
     local text_w = w - 2 * border - pl - 16
     local inner_w, inner_h = w - 2 * border - pl, h - 2 * border - pt
     local content = VerticalGroup:new{ align = "left",
-        HorizontalGroup:new{ align = "center", box(50, 44, txt(icon, ICONS, 40, GRAY), "left"),
-            txt(self:tr(label), BOLD, wide and 25 or 32, GRAY, text_w - 50) },
+        -- The wind and sunset glyphs are ~10 px wider than the others: leave room so they don't touch the label.
+        HorizontalGroup:new{ align = "center", box(60, 44, txt(icon, ICONS, 40, GRAY), "left"),
+            fitTxt(self:tr(label), BOLD, wide and 25 or 32, GRAY, text_w - 60, wide and 20 or 24) },
         vspan(2),
-        txt(value, HEAVY, wide and 68 or 82, BLACK, text_w),
-        txt(sub or " ", SANS, wide and 27 or 36, GRAY, text_w),
+        -- Landscape tiles are narrow: "0.25 inch", "125.4 mm", "12:59 PM" don't fit at full size.
+        fitTxt(value, HEAVY, wide and 68 or 82, BLACK, text_w, wide and 44 or 56),
+        fitTxt(sub or " ", SANS, wide and 27 or 36, GRAY, text_w, wide and 20 or 26),
     }
     return FrameContainer:new{
         radius = 28, bordersize = border, color = BLACK, background = WHITE,

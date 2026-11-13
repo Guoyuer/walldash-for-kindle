@@ -135,6 +135,31 @@ eq("obs light rain+fog", W.obsCode("Light Rain and Fog/Mist"), 61); eq("obs heav
 eq("obs showers", W.obsCode("Showers in Vicinity"), 80); eq("obs drizzle", W.obsCode("Light Drizzle"), 53)
 eq("obs snow", W.obsCode("Light Snow"), 71); eq("obs freezing", W.obsCode("Freezing Rain"), 66)
 eq("obs thunder", W.obsCode("Thunderstorms and Rain"), 95); eq("obs fog", W.obsCode("Fog/Mist"), 45)
+-- shortText: real NWS strings (KNYC/KLGA/KJFK, Nov 2026) -> home-page headline
+eq("short single", W.shortText("Mostly Cloudy"), "Mostly Cloudy")
+eq("short empty", W.shortText(""), "")
+eq("short rain+fog", W.shortText("Light Rain and Fog/Mist"), "Light Rain")
+eq("short cloudy+windy", W.shortText("Partly Cloudy and Windy"), "Partly Cloudy")
+eq("short wind only", W.shortText("Windy"), "Windy")
+eq("short thunder+rain", W.shortText("Thunderstorms and Rain and Fog/Mist"), "Thunderstorms")
+eq("short worst KJFK", W.shortText("Heavy Thunderstorms and Heavy Rain and Thunderstorms and Hail and Fog/Mist"),
+    "Heavy Thunderstorms")
+eq("short two precip fit", W.shortText("Rain and Snow"), "Rain and Snow")
+eq("short fog+haze", W.shortText("Fog/Mist and Haze"), "Fog/Mist and Haze")
+eq("short double space", W.shortText("Light  Snow and Fog and Blowing Snow"), "Light Snow")
+eq("short thunder first", W.shortText("Light Rain and Fog/Mist and Thunderstorms"), "Thunderstorms")
+eq("short fog then snow", W.shortText("Fog and Blowing Snow"), "Blowing Snow")
+eq("short two precip", W.shortText("Light Snow and Sleet and Fog and Blowing Snow"), "Light Snow and Sleet")
+local function rest(s) return select(2, W.shortText(s)) end
+eq("rest single", rest("Mostly Cloudy"), nil)
+eq("rest rain+fog", rest("Light Rain and Fog/Mist"), "Fog/Mist")
+eq("rest windy", rest("Partly Cloudy and Windy"), "Windy")
+eq("rest worst KJFK", rest("Heavy Thunderstorms and Heavy Rain and Thunderstorms and Hail and Fog/Mist"),
+    "Heavy Rain · Hail · Fog/Mist")
+eq("rest thunder first", rest("Light Rain and Fog/Mist and Thunderstorms"), "Light Rain · Fog/Mist")
+eq("rest wind only", rest("Windy and Breezy"), "Breezy")
+eq("rest two in head", rest("Rain and Snow"), nil)
+eq("obs unknown precip -> model", W.obsCode("Unknown Precipitation and Fog"), nil)
 eq("obs haze", W.obsCode("Haze"), 45); eq("obs unknown", W.obsCode("Funnel Cloud?"), nil); eq("obs empty", W.obsCode(""), nil)
 
 -- small helpers
