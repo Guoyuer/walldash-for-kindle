@@ -793,7 +793,8 @@ function Dashboard:hourlyChart(h, first)
     for k = 0, n - 1 do
         local i = first + k
         times[k] = parseWallTime(h.time[i])
-        temps[k + 1] = h.temperature_2m[i] + delta * math.max(0, 1 - k / BLEND_HOURS)
+        -- Whole degrees, like the labels.
+        temps[k + 1] = math.floor(h.temperature_2m[i] + delta * math.max(0, 1 - k / BLEND_HOURS) + 0.5)
         local _, icon = Weather.describe(h.weather_code[i], h.is_day and h.is_day[i] == 1)
         icons[k] = icon
         chances[k] = Weather.hourlyPrecipChance(h, i)
@@ -812,7 +813,13 @@ function Dashboard:hourlyChart(h, first)
     local total_h = bars_bottom + 4
     if not any_precip then total_h = title_top + S.title_h + 20 end
 
-    local f = Curve.monotone(temps)
+    -- The curve goes through the labelled 3-hour points (and the last hour) only, so points labelled alike sit level
+    -- and rounding the hours in between doesn't add steps or notches.
+    local cx, cy = {}, {}
+    for k = 0, n - 1 do
+        if k % LABEL_EVERY == 0 or k == n - 1 then cx[#cx + 1], cy[#cy + 1] = k + 1, temps[k + 1] end
+    end
+    local f = Curve.monotone(cy, cx)
     -- At least 10 °C (18 °F) of height, so a steady day looks flat instead of a cliff.
     local lo, hi = Curve.range(temps, self.settings.units == "imperial" and 18 or 10)
     local function yAt(v) return curve_bottom - 18 - (v - lo) / (hi - lo) * (S.curve_h - 36) end
