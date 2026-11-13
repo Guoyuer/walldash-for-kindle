@@ -83,11 +83,13 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 - `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details).
   Pages 2–4 share one layout (`rebuild`): the title block sits at the same height on every page and the content is
   centred in the space between it and the footer (`self.body_h`), which the hourly chart fills.
-  Hourly = a 24 h chart (`hourlyChart`, `forecast_hours=27`): icons every 3 h, temperature curve with a gray
-  fill (whole degrees through the labelled 3-hour points only; the current temperature's offset from the forecast
-  fades out over 4 h; at least 6 °C / 11 °F of height, padded below so the top stays under the icons), time
-  axis with a short midnight tick and the day's name on the axis, hourly
-  precipitation-chance bars under one aligned row of numbers (highest chance per 3-hour block, blank < 20 %). Drawn by a `Canvas` widget (Blitbuffer
+  Hourly = a 24 h chart (`hourlyChart`, `forecast_hours=27`): labels at "now" and every even clock hour (midnight shows the
+  day's name), an icon above every second label, temperature curve with a gray
+  fill (whole degrees through the labelled points only; the current temperature's offset from the forecast
+  fades out over 4 h; at least 6 °C / 11 °F of height, padded below so the top stays under the icons), hourly
+  precipitation-chance bars hanging down from the time axis, above one aligned row of numbers and the title (highest chance per 2-hour block, blank < 20 %).
+  Label rows drop their units (bare degrees, bare hours, "%" in the bars' title) and share one size per row
+  (`rowPx`) so the digits are as big as a column allows: the page is read from across the room. Drawn by a `Canvas` widget (Blitbuffer
   has no line primitive: the curve is 1 px `paintRect` columns), labels via `OverlapGroup` offsets. Swipe = page,
   tap = refresh, long-press = close. Ticks on each minute; weather at fixed wall-clock slots a few minutes
   after NWS stations report: :03/:18/:33/:48 plugged in, :03 on battery (`WEATHER_STEP*`, `Weather.secondsToSlot`;
