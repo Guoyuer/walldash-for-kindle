@@ -8,7 +8,7 @@ Turn a jailbroken Kindle Paperwhite 4 into a wall-mounted e-ink clock and weathe
 
 ## Compatibility
 
-The hardware baseline is **Kindle Paperwhite 4 (10th generation, 2018)** with firmware **5.18.1** and KOReader **2026.07.2** (`kindlehf`). The plugin loads on the PW4 and in KOReader's SDL desktop environment. The desktop build is for UI testing. RTC wake, frontlight recovery, and battery life require hardware tests.
+DeskDash supports the **Kindle Paperwhite 4 (10th generation, 2018)**. The tested configuration is firmware **5.18.1** with KOReader **2026.07.2** (`kindlehf`). Use KOReader's SDL build for [desktop UI testing](CONTRIBUTING.md#ui-and-hardware-testing).
 
 ## Install
 
@@ -16,7 +16,7 @@ The hardware baseline is **Kindle Paperwhite 4 (10th generation, 2018)** with fi
 2. Quit KOReader and connect the Kindle via USB. Download or clone this repository and copy the entire `deskdash.koplugin` directory into `koreader/plugins/` on the Kindle drive. The resulting path is `koreader/plugins/deskdash.koplugin/main.lua`.
 3. Safely eject the Kindle, connect it to Wi-Fi, and open KOReader from the library. The dashboard opens automatically by default. To open it manually, use **Tools → Desk dashboard → Open dashboard**.
 
-The plugin directory is all you need for normal use. Jobman, SSH, and Python are optional development tools. To update or uninstall, quit KOReader, then replace or remove the plugin directory. To restore KOReader's automatic sleep after uninstalling, re-enable **Auto suspend** in KOReader's plugin management and restart KOReader.
+To update or uninstall, quit KOReader, then replace or remove the plugin directory. After uninstalling, re-enable **Auto suspend** in KOReader's plugin management and restart KOReader.
 
 ## Use
 
@@ -29,7 +29,7 @@ The plugin directory is all you need for normal use. Jobman, SSH, and Python are
 
 By default, [ip-api](https://ip-api.com/docs/api:json) infers an approximate location from your public IP over HTTP. DeskDash processes and displays forecast, nowcast, and air-quality data from [Open-Meteo](https://open-meteo.com/). US station observations and alerts come from the [National Weather Service](https://www.weather.gov/documentation/services-web-api). Requests to the weather providers include latitude and longitude.
 
-For a fixed location, quit KOReader and add `["deskdash_lat"] = 40.7829,` and `["deskdash_lon"] = -73.9654,` inside the settings table in `koreader/settings.reader.lua`. Replace the example with your coordinates. You can add `["deskdash_city"] = "New York",` to set the display name. Setting both coordinates skips the IP lookup.
+You can [set a fixed location](docs/weather-accuracy.md#fixed-location) to skip the IP lookup.
 
 Open-Meteo data is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The plugin uses its free hosted endpoint, which is available for non-commercial use under the [Open-Meteo terms](https://open-meteo.com/en/terms).
 

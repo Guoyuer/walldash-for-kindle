@@ -8,7 +8,7 @@
 
 ## 支持范围
 
-实机基线为 **Kindle Paperwhite 4（第 10 代，2018）**、固件 **5.18.1**、KOReader **2026.07.2**（`kindlehf`）。当前只在 PW4 和 KOReader 的桌面 SDL 环境加载插件。桌面环境用于检查界面，RTC、前光和功耗需要在实机验证。
+支持 **Kindle Paperwhite 4（第 10 代，2018）**。实测组合为固件 **5.18.1** 和 KOReader **2026.07.2**（`kindlehf`）。[桌面界面测试](CONTRIBUTING.md#ui-and-hardware-testing)可在 KOReader 的 SDL 环境运行。
 
 ## 安装
 
@@ -16,7 +16,7 @@
 2. 退出 KOReader，用 USB 把 Kindle 连到电脑。下载或克隆本仓库，把整个 `deskdash.koplugin` 文件夹复制到 Kindle USB 盘的 `koreader/plugins/` 下。确认最终路径为 `koreader/plugins/deskdash.koplugin/main.lua`。
 3. 安全弹出 Kindle，连上 Wi-Fi，再从书库打开 KOReader。DeskDash 默认自动打开。也可以在 KOReader 的 **工具 → Desk dashboard → Open dashboard** 打开。
 
-日常使用只需复制插件目录。Jobman、SSH 和 Python 是可选的开发工具。更新时先退出 KOReader，再替换插件目录。卸载时退出 KOReader 并删除插件目录。如需恢复 KOReader 的自动休眠，在其插件管理里重新启用 **Auto suspend** 并重启 KOReader。
+更新时先退出 KOReader，再替换插件目录。卸载时退出 KOReader 并删除插件目录，在插件管理里重新启用 **Auto suspend**，然后重启 KOReader。
 
 ## 操作与电池模式
 
@@ -29,10 +29,10 @@
 
 默认通过 [ip-api](https://ip-api.com/docs/api:json) 的 HTTP 接口按公网 IP 查找大致位置。预报、降水临近预报和 AQI 由 [Open-Meteo](https://open-meteo.com/) 提供并经 DeskDash 整理展示。美国境内的气象站实况和预警来自 [美国国家气象局](https://www.weather.gov/documentation/services-web-api)。天气请求会向对应服务发送经纬度。
 
-如需固定位置，退出 KOReader 后在 `koreader/settings.reader.lua` 的设置表内添加 `["deskdash_lat"] = 40.7829,` 和 `["deskdash_lon"] = -73.9654,`，把示例换成目标位置。也可加 `["deskdash_city"] = "New York",` 作为显示名称。经纬度都已设置时跳过 IP 定位。
+如需固定位置或跳过 IP 定位，可[手动设置经纬度](docs/weather-accuracy.md#fixed-location)。
 
 Open-Meteo 数据采用 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)。项目默认使用仅供非商业用途的免费 API，详见 [Open-Meteo 服务条款](https://open-meteo.com/en/terms)。
 
 ## 开发与贡献
 
-参见 [贡献指南](CONTRIBUTING.md)、[性能测试](docs/performance-benchmarks.md)和[天气数据比较](docs/weather-accuracy.md)。项目源码采用 [GNU AGPL v3](LICENSE)。
+参见[贡献指南](CONTRIBUTING.md)。项目源码采用 [GNU AGPL v3](LICENSE)。
