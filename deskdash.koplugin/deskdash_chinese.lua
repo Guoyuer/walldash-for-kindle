@@ -2,6 +2,7 @@
 return {
     ["Settings"] = "设置",
     ["Time format"] = "时间制",
+    ["Units"] = "单位",
     ["12 h"] = "12 小时",
     ["24 h"] = "24 小时",
     ["Orientation"] = "方向",
