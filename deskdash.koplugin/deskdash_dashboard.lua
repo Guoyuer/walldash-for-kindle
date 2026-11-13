@@ -770,14 +770,15 @@ end
 -- Next 24 hours, like Apple Weather: icons every 3 h, a smooth temperature curve with the area below it filled,
 -- a time axis (a thin line at midnight) and hourly precipitation-chance bars.
 local CHART_HOURS, LABEL_EVERY = 24, 3
+local PRECIP_LABEL_MIN = 20   -- % below which a 3-hour block's number is left blank
 local BLEND_HOURS = 4     -- the current temperature's offset from the forecast fades out over this many hours
 function Dashboard:hourlyChart(h, first)
     local wide, W = self.landscape, self.W
     local n = math.min(CHART_HOURS, #h.time - first)   -- hourlyPrecipChance reads i + 1
     local S = wide and { icon_h = 76, icon = 52, label_h = 48, curve_h = 250, temp = 36, axis_h = 52, axis = 32,
-                         gap = 26, title_h = 40, title = 26, bar_label_h = 38, bar_h = 110, pct = 28 }
+                         gap = 26, title_h = 40, title = 26, bar_label_h = 46, bar_h = 110, pct = 28 }
                    or { icon_h = 100, icon = 66, label_h = 58, curve_h = 380, temp = 42, axis_h = 64, axis = 36,
-                         gap = 44, title_h = 50, title = 30, bar_label_h = 46, bar_h = 200, pct = 32 }
+                         gap = 44, title_h = 50, title = 30, bar_label_h = 58, bar_h = 200, pct = 32 }
     local margin = wide and 90 or 56
     local inner = wide and 50 or 46   -- half a label: the first and last points sit this far inside the margins
     local x0, x1 = margin + inner, W - margin - inner
@@ -882,10 +883,12 @@ function Dashboard:hourlyChart(h, first)
         local label = k == 0 and self:tr("Now")
             or clock_24h and os.date("!%H:%M", times[k]) or (os.date("!%I %p", times[k]):gsub("^0", ""))
         place(og, txt(label, k == 0 and BOLD or SANS, S.axis, k == 0 and BLACK or GRAY), x, axis_top + 6, W)
-        if any_precip and chances[k] > 0 then   -- above this bar and its neighbours (the label is wider)
-            local bh = math.floor(math.max(chances[k], chances[k - 1] or 0, chances[k + 1] or 0) / 100 * S.bar_h + 0.5)
-            local pct = txt(chances[k] .. "%", SANS, S.pct, GRAY)
-            place(og, pct, x, bars_bottom - bh - pct:getSize().h - 4, W)
+        -- One row of numbers above the bars, aligned with the time axis: the highest chance in each 3-hour block
+        -- (so a peak between two labels isn't missed); blank below PRECIP_LABEL_MIN.
+        local block = 0
+        for j = k, math.min(k + LABEL_EVERY - 1, n - 1) do block = math.max(block, chances[j]) end
+        if any_precip and block >= PRECIP_LABEL_MIN then
+            place(og, txt(block .. "%", SANS, S.pct, GRAY), x, bars_top - S.bar_label_h, W)
         end
     end
     local title = txt(self:tr(any_precip and "CHANCE OF PRECIP" or "No precipitation in the next 24 h"),
