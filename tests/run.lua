@@ -225,6 +225,13 @@ eq("curve passes through points", through, true)
 eq("curve stays between neighbours", bounded, true)
 eq("curve flat segment", f(3.5), 15)
 eq("curve single point", Curve.monotone({ 7 })(1), 7)
+local g = Curve.monotone({ 9, 9, 8, 6 }, { 0, 3, 6, 8 })
+eq("uneven x passes through", g(6), 8)
+eq("uneven x last point", g(8), 6)
+eq("uneven x plateau flat", g(1.5), 9)
+local ok_range = true
+for s = 0, 20 do local y = g(6 + s / 10); ok_range = ok_range and y <= 8 + 1e-9 and y >= 6 - 1e-9 end
+eq("uneven x stays between neighbours", ok_range, true)
 local lo, hi = Curve.range({ 10, 11 }, 4)
 eq("range widened", lo .. "," .. hi, "8.5,12.5")
 lo, hi = Curve.range({ 2, 20 }, 4)

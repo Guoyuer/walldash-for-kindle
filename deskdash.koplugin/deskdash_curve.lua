@@ -3,14 +3,18 @@ Pure math for the dashboard's charts (no KOReader dependencies, so tests/run.lua
 ]]
 local Curve = {}
 
---- Monotone cubic interpolation (Fritsch–Carlson) through the points (1, ys[1]) .. (n, ys[n]).
---- Returns f(x) for x in [1, n]: smooth, passes through every point and never leaves the range of the two points
---- around x, so the curve doesn't overshoot at a maximum or minimum.
-function Curve.monotone(ys)
+--- Monotone cubic interpolation (Fritsch–Carlson) through the points (xs[k], ys[k]); xs defaults to 1..n and must
+--- increase. Returns f(x) for x in [xs[1], xs[n]]: smooth, passes through every point and never leaves the range of
+--- the two points around x, so the curve doesn't overshoot at a maximum or minimum.
+function Curve.monotone(ys, xs)
     local n = #ys
     if n == 1 then return function() return ys[1] end end
+    if not xs then
+        xs = {}
+        for k = 1, n do xs[k] = k end
+    end
     local d, m = {}, {}
-    for k = 1, n - 1 do d[k] = ys[k + 1] - ys[k] end
+    for k = 1, n - 1 do d[k] = (ys[k + 1] - ys[k]) / (xs[k + 1] - xs[k]) end
     m[1], m[n] = d[1], d[n - 1]
     for k = 2, n - 1 do
         m[k] = d[k - 1] * d[k] > 0 and (d[k - 1] + d[k]) / 2 or 0
@@ -28,11 +32,13 @@ function Curve.monotone(ys)
         end
     end
     return function(x)
-        local k = math.max(1, math.min(n - 1, math.floor(x)))
-        local t = math.max(0, math.min(1, x - k))
+        local k = 1
+        while k < n - 1 and x > xs[k + 1] do k = k + 1 end
+        local hk = xs[k + 1] - xs[k]
+        local t = math.max(0, math.min(1, (x - xs[k]) / hk))
         local t2, t3 = t * t, t * t * t
-        return (2 * t3 - 3 * t2 + 1) * ys[k] + (t3 - 2 * t2 + t) * m[k]
-            + (-2 * t3 + 3 * t2) * ys[k + 1] + (t3 - t2) * m[k + 1]
+        return (2 * t3 - 3 * t2 + 1) * ys[k] + (t3 - 2 * t2 + t) * hk * m[k]
+            + (-2 * t3 + 3 * t2) * ys[k + 1] + (t3 - t2) * hk * m[k + 1]
     end
 end
 
