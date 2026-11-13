@@ -293,7 +293,7 @@ end
 
 function Dashboard:refreshWeather(manual)
     if self.weather_job then return end
-    local job = { initial = self.next_fetch_at == math.huge, manual = manual }
+    local job = { initial = self.next_fetch_at == math.huge, manual = manual, units = self.settings.units }
     self.pw.fetches = self.pw.fetches + 1
     self:setWifi(true)
     local pid, err = WeatherJob.start{ settings = self.settings, offset = self.offset, station = self.station,
@@ -337,6 +337,10 @@ function Dashboard:finishWeather(job, result)
     logger.info("deskdash: next weather at", os.date("!%H:%M", self.next_fetch_at - os.time() + self:localNow()))
     if job.initial then self:logPower("start") end
     self:redraw(job.manual and "full" or "ui")
+    -- The units setting changed while this request was in flight: its values are in the old units.
+    if result and result.data and job.units ~= self.settings.units then
+        UIManager:nextTick(function() self:refreshWeather(true) end)
+    end
     if job.ack then self:ackCommand(job.ack, self.page_ok) end
 end
 
@@ -548,9 +552,11 @@ end
 local SETTING_ROWS = {
     { key = "language", label = "语言 / Language", options = { { "中文", "zh" }, { "English", "en" } } },
     { key = "clock_24h", label = "Time format", options = { { "12 h", false }, { "24 h", true } } },
+    -- Open-Meteo switches wind (km/h, mph) and precipitation (mm, inch) together with the temperature unit.
+    { key = "units", label = "Units", options = { { "°C", "metric" }, { "°F", "imperial" } } },
     { key = "landscape", label = "Orientation", options = { { "Portrait", false }, { "Landscape", true } } },
 }
-local PANEL_W, PANEL_H, PANEL_TOP, SETTING_ROW_H = 760, 400, 90, 92
+local PANEL_W, PANEL_H, PANEL_TOP, SETTING_ROW_H = 760, 492, 90, 92
 local SETTING_LABEL_W, SETTING_CHOICE_W = 290, 210
 local PANEL_CONTENT_W = SETTING_LABEL_W + 2 * SETTING_CHOICE_W
 local PANEL_CONTENT_H = PANEL_TOP + #SETTING_ROWS * SETTING_ROW_H
@@ -594,6 +600,7 @@ function Dashboard:onSettingsTap(pos)
                 self:writeRotation()
             end
             self:redraw("full")
+            if key == "units" then self:refreshWeather(true) end   -- forecast values come in the requested units
         end
     elseif pos.x < (self.W - PANEL_W) / 2 or pos.x >= (self.W + PANEL_W) / 2
         or pos.y < (self.H - PANEL_H) / 2 or pos.y >= (self.H + PANEL_H) / 2 then
@@ -846,6 +853,7 @@ function Dashboard:pageDetails()
     if not d then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local W, c, day, I = Weather, d.current, d.daily, Weather.ICON
     local units = (type(d.current_units) == "table" and d.current_units.wind_speed_10m) or "km/h"
+    if units == "mp/h" then units = "mph" end   -- Open-Meteo's spelling
     local punits = d.daily_units.precipitation_sum or "mm"
     local columns, th, gap = self.landscape and 4 or 2, self.landscape and 340 or 263, 22
     local tw = math.floor((self.W - 80 - (columns - 1) * gap) / columns)
