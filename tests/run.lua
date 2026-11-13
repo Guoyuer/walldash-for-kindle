@@ -1,4 +1,4 @@
--- Unit tests for the pure logic in deskdash_weather.lua.
+-- Offline tests for the dashboard's weather, chart, and device selection logic.
 -- Run from the repo root: luajit tests/run.lua  (PC), or on the Kindle inside /mnt/us/koreader (real logger/rapidjson).
 -- tools/check.sh runs this before every deploy.
 local plugin_dir = arg and arg[1] or "deskdash.koplugin"
@@ -15,6 +15,39 @@ local function eq(name, got, want)
     else failed = failed + 1; print(string.format("FAIL %s: got %s, want %s", name, tostring(got), tostring(want))) end
 end
 local hm = function(t) return os.date("!%H:%M", t) end
+
+-- Unsupported devices must return before loading UI or touching Kindle power settings.
+do
+    local device = package.loaded.device
+    package.loaded.device = { model = "KindlePaperWhite5", isSDL = function() return false end }
+    eq("other Kindle models do not load the plugin", dofile(plugin_dir .. "/main.lua").disabled, true)
+    package.loaded.device = device
+end
+
+-- Exercise station discovery without making network requests.
+do
+    local json = package.loaded.rapidjson or package.loaded.json
+    local decode, popen = json.decode, io.popen
+    local station_url = "https://api.weather.gov/gridpoints/OKX/34,45/stations"
+    local station_id, calls = "KNYC", 0
+    json.decode = function(body)
+        if body == "point" then return { properties = { observationStations = station_url } } end
+        return { features = { { properties = { stationIdentifier = station_id } } } }
+    end
+    io.popen = function(cmd)
+        calls = calls + 1
+        local body = cmd:find("/points/", 1, true) and "point" or "stations"
+        return { read = function() return body end, close = function() end }
+    end
+    eq("station discovery accepts NWS gridpoints URL", W.findStation(40.7829, -73.9654), "KNYC")
+    eq("station discovery fetches point and station list", calls, 2)
+    station_id = "bad/station"
+    eq("station discovery rejects malformed identifier", W.findStation(40.7829, -73.9654), nil)
+    station_url, calls = "https://example.org/gridpoints/OKX/34,45/stations", 0
+    eq("station discovery rejects other hosts", W.findStation(40.7829, -73.9654), nil)
+    eq("station discovery stops after an unexpected URL", calls, 1)
+    json.decode, io.popen = decode, popen
+end
 
 -- parseWallTime: "local" epochs that format back to the same wall-clock time
 eq("parseWallTime time", hm(W.parseWallTime("2026-11-05T13:00")), "13:00")
