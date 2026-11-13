@@ -136,6 +136,10 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 - The user prefers simple solutions, no NAS/server dependency, and tapping KOReader by hand after a reboot (no boot autostart).
 - The Kindle is only a wall clock, so `main.lua` adds `autosuspend` to KOReader's `plugins_disabled` (effective from
   the next KOReader start). Don't add hand-over code for that plugin or patch it on the device.
+  Why: on 2026-11-09 at 07:03 its Kindle t1 task re-queued itself with a past deadline and spun the UI loop: no
+  ticks, no suspends, powerd logging `batmon:Charging state` ~185 times/s (`/var/local/log/messages_*.gz`), ~33 mA
+  until 11:21 (142 mAh). The tell-tale is hourly rows missing from `deskdash_power.csv` without a `close` row.
+  Don't unpack those logs into `/tmp` (64 MB tmpfs shared with `/var`); pipe `zcat` instead.
 - `initctl stop lab126_gui` was tried and rejected: the stock UI takes 30–60 s to come back.
 - `ref/` (gitignored) has KOReader source for API reference; the device copy is in `/mnt/us/koreader/frontend/`.
 
