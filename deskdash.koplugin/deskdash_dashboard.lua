@@ -44,7 +44,7 @@ local HEAVY = BOLD   -- big numerals (KOReader can't see the Kindle's Amazon Emb
 local PAGES = 4
 local IDLE_RETURN = 120          -- seconds on another page before returning to "Now"
 -- Weather fetches run at fixed wall-clock minutes, a few minutes after NWS stations' hourly reports (~:51-:56).
--- Each one switches Wi-Fi on for ~10 s, the most expensive thing in battery mode, so it is half as often there.
+-- Each one switches Wi-Fi on for ~10 s, so it runs hourly on battery.
 local WEATHER_STEP = 15          -- minutes between fetches when plugged in
 local WEATHER_STEP_BATTERY = 60  -- minutes between fetches on battery (stations and NBM update hourly)
 local WEATHER_SLOT = 3           -- slot offset in minutes: :03, :18, :33, :48 (battery: :03)
@@ -314,7 +314,7 @@ function Dashboard:refreshWeather(manual)
     local job = { initial = self.next_fetch_at == math.huge, manual = manual, units = self.settings.units }
     self.pw.fetches = self.pw.fetches + 1
     self:setWifi(true)
-    local pid, err = WeatherJob.start{ settings = self.settings, offset = self.offset, station = self.station,
+    local pid, err = WeatherJob.start{ settings = self.settings, station = self.station,
         kindle = Device:isKindle(), benchmark = self.benchmark,
         want_aq = manual or not self.aq_at or os.time() - self.aq_at >= AQ_EVERY }
     if not pid then
@@ -334,7 +334,7 @@ function Dashboard:finishWeather(job, result)
         for _, phase in ipairs(result.phases or {}) do Bench.add(self.pw.stats, "weather." .. phase[1], phase[2]) end
         local loc, s = result.location, self.settings
         if loc then
-            s.lat, s.lon, s.city = s.lat or loc.lat, s.lon or loc.lon, s.city or loc.city
+            s.lat, s.lon, s.city = loc.lat, loc.lon, s.city or loc.city
             self.offset = loc.offset
         end
         self.data = result.data or self.data

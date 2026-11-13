@@ -7,7 +7,7 @@ User-facing docs are in `README.md` (Chinese). This file is the setup/context an
 
 - Kindle Paperwhite 4 (PW4), firmware 5.18.1, hard-float (`kindlehf`), 1072x1448, 300 dpi, 8bpp framebuffer (stride 1088).
 - Jailbroken (SpiderCat). Installed via KPM (`/var/local/kmc/bin/kpm`, repo repo.kindlemodding.org): **KOReader 2026.7.2**, **Jobman**.
-- Wi-Fi IP `192.168.0.10` (DHCP; update `~/.ssh/config` if it changes). Touch: goodix `/dev/input/event2`; power key `event0`.
+- Set the `kindle` SSH alias to the device's Wi-Fi IP. Touch: goodix `/dev/input/event2`; power key `event0`.
 - `/mnt/us` is the user storage (vfat). **Plugged into a PC, it's exported as USB mass storage and unmounted on the device**: scripts there stop and SSH fails. Use a wall charger while developing.
 
 ## Access: SSH (key only)
@@ -16,7 +16,8 @@ User-facing docs are in `README.md` (Chinese). This file is the setup/context an
 - Server: Jobman's dropbear (`/mnt/us/jobman/bin/dropbearmulti`), started by `kdev/sshd.sh`. That dropbear build reads
   `authorized_keys` and host keys from `/mnt/us/jobman/ssh/etc/dropbear/` (it ignores `~/.ssh`); `sshd.sh` copies
   `kdev/authorized_keys` there and opens port 22 for 192.168.0.0/16 in iptables (default INPUT policy is DROP).
-- Started automatically when the deskdash plugin loads (KOReader start), or by the library scriptlet **SSH - Start**.
+- Optional. See [CONTRIBUTING.md](CONTRIBUTING.md) to install the helper and add a per-device public key. The helper
+  runs at KOReader start when installed, or via the library scriptlet **SSH - Start**.
 - **When unplugged in battery mode the Kindle is suspended ~58 s of every minute → SSH is unreachable.** Plug it into a
   charger (it then stays awake), or press the power button for a 60 s window.
 - Remote `pgrep -f`/`pkill -f`: the pattern also matches the `sh -c` running your ssh command. Use `"[k]oreader.sh"` style patterns.
@@ -53,7 +54,7 @@ Dev loop: edit -> `sh tools/deploy_dash.sh` -> look at `tools/inbox/dash.png` (`
   `kctl dash` waits for a matching repaint acknowledgment before reading the framebuffer. Deploy screenshots
   also wait for the first weather attempt. Keep commands serial.
 - Screenshots: `/dev/fb0` holds several frames (6.8 MB, 23 s over Wi-Fi); `kctl` reads only the visible one, gzipped (~35 KB).
-- Remote: private GitHub repo `Guoyuer/kindle-mod` (push after committing). No cloud CI: deploying needs the LAN.
+- GitHub Actions runs offline checks. Deploy and power verification require a PW4 on the LAN.
 - Launch KOReader: `setsid /var/local/kmc/bin/kpm launch koreader --asap`. Logs: `/mnt/us/koreader/crash.log`.
 
 ## The dashboard: `deskdash.koplugin/`
@@ -71,7 +72,7 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   CAMS AQI (labelled as an estimate) + NWS alerts (api.weather.gov, US only; fetched even if the forecast fails) + computed moon phase +
   ip-api location/UTC offset, via the system `curl`.
   **Current conditions come from the nearest NWS station's latest observation** (`Weather.observation`, station
-  cached after the first lookup; Queens Plaza -> KNYC Central Park), mapped to a WMO code by `Weather.obsCode`;
+  cached after the first lookup), mapped to a WMO code by `Weather.obsCode`;
   Open-Meteo's modelled `current.weather_code` is only the fallback (>2 h old / unknown text / outside the US). The
   model said "Clear" (7 % cloud) while every station reported Cloudy, so don't trust it for the sky.
   Model accuracy study: `docs/weather-accuracy.md` (NBM beats best_match ~2x on temperature here; rerun
@@ -147,7 +148,7 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 - The stock status bar (Wi-Fi/battery; five dashes while Wi-Fi reconnects) sometimes shows in the top-right corner
   even though KOReader stops `awesome` and disables pillow. The user said this is fine; don't spend time on it.
 - The user prefers simple solutions, no NAS/server dependency, and tapping KOReader by hand after a reboot (no boot autostart).
-- The Kindle is only a wall clock, so `main.lua` adds `autosuspend` to KOReader's `plugins_disabled` (effective from
+- On PW4, `main.lua` adds `autosuspend` to KOReader's `plugins_disabled` (effective from
   the next KOReader start). Don't add hand-over code for that plugin or patch it on the device.
   Why: on 2026-11-09 at 07:03 its Kindle t1 task re-queued itself with a past deadline and spun the UI loop: no
   ticks, no suspends, powerd logging `batmon:Charging state` ~185 times/s (`/var/local/log/messages_*.gz`), ~33 mA

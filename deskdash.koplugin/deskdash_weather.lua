@@ -8,9 +8,13 @@ local json = ok_json and rapidjson or require("json")
 
 local Weather = {}
 
+local function shellQuote(value)
+    return "'" .. value:gsub("'", "'\\''") .. "'"
+end
+
 local function curl(url, headers)
     -- Clear KOReader's LD_LIBRARY_PATH so the system curl uses the system OpenSSL, not KOReader's bundled one.
-    local p = io.popen("LD_LIBRARY_PATH= curl -s -f -m 20 " .. (headers or "") .. " '" .. url .. "' 2>/tmp/deskdash_curl.err")
+    local p = io.popen("LD_LIBRARY_PATH= curl -s -f -m 20 " .. (headers or "") .. " " .. shellQuote(url) .. " 2>/tmp/deskdash_curl.err")
     if not p then return nil end
     local body = p:read("*a")
     p:close()
@@ -23,7 +27,8 @@ end
 function Weather.curlAll(requests, prefix)
     local cmd = { "export LD_LIBRARY_PATH=;" }
     for i, r in ipairs(requests) do
-        cmd[#cmd + 1] = string.format("curl -s -f -m 20 %s '%s' >%s%d 2>/dev/null &", r.headers or "", r.url, prefix, i)
+        cmd[#cmd + 1] = string.format("curl -s -f -m 20 %s %s >%s 2>/dev/null &",
+            r.headers or "", shellQuote(r.url), shellQuote(prefix .. i))
     end
     cmd[#cmd + 1] = "wait"
     os.execute(table.concat(cmd, " "))
@@ -109,7 +114,7 @@ function Weather.locate()
         return { city = type(t.city) == "string" and t.city or nil, lat = t.lat, lon = t.lon,
             offset = type(t.offset) == "number" and t.offset or nil }
     end
-    logger.warn("deskdash: locate failed", body)
+    logger.warn("deskdash: IP geolocation failed")
 end
 
 local CURRENT = { "temperature_2m", "apparent_temperature", "relative_humidity_2m", "dew_point_2m",
@@ -212,10 +217,7 @@ end
 function Weather.parseForecast(body)
     if not body then return nil, "no response" end
     local t = decode(body)
-    if not t or type(t.current) ~= "table" then
-        logger.warn("deskdash: bad forecast", body:sub(1, 200))
-        return nil, "bad response"
-    end
+    if not t or type(t.current) ~= "table" then return nil, "bad response" end
     return Weather.selectForecast(t)
 end
 
@@ -333,10 +335,11 @@ end
 function Weather.findStation(lat, lon)
     local pt = nws(string.format("/points/%.4f,%.4f", lat, lon))
     local url = pt and pt.properties and pt.properties.observationStations
-    local st = type(url) == "string" and nws(url:gsub("^https://api.weather.gov", "") .. "?limit=1")
+    local path = type(url) == "string" and url:match("^https://api%.weather%.gov(/gridpoints/[A-Z]+/%-?%d+,%-?%d+/stations)$")
+    local st = path and nws(path .. "?limit=1")
     local f = st and st.features and st.features[1]
     local station = f and f.properties and f.properties.stationIdentifier
-    if type(station) == "string" then return station end
+    if type(station) == "string" and station:match("^[A-Z0-9]+$") then return station end
 end
 
 function Weather.observationRequest(station)
