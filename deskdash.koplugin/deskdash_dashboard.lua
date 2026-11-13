@@ -635,21 +635,18 @@ function Dashboard:footer()
         box(GEAR_W, FOOTER_H, txt(Weather.ICON.settings, ICONS, 38)),
     }
     footer[2].overlap_offset = { self.W - GEAR_W - GEAR_RIGHT, 0 }
-    local left = HorizontalGroup:new{ align = "center", txt(self:hhmm(self:localNow()), BOLD, 40) }
-    local battery = self:batteryBadge()
-    if battery then
-        table.insert(left, hspan(32))
-        table.insert(left, battery)
-    end
-    local status = box(left:getSize().w, FOOTER_H, left, "left")
-    status.overlap_offset = { 40, 0 }
-    table.insert(footer, status)
     return footer
 end
 
--- Pages 2-4 have no title or city (the content says what it is); the time is in the footer.
-function Dashboard:pageGroup()
-    return VerticalGroup:new{ align = "center" }
+function Dashboard:header(title)
+    local s = self.settings
+    return VerticalGroup:new{ align = "center",
+        vspan(self.landscape and 22 or 38),
+        txt(self:tr(title), BOLD, 46, BLACK),
+        vspan(8),
+        txt((s.city or "") .. "  ·  " .. self:hhmm(self:localNow()), SANS, 34, GRAY, self.W - 80),
+        vspan(self.landscape and 18 or 30),
+    }
 end
 
 -- Current conditions: the nearest NWS station's observation if it's recent and understood (models often get the
@@ -760,7 +757,7 @@ function Dashboard:pageNow()
 end
 
 function Dashboard:pageHourly()
-    local g = self:pageGroup()
+    local g = self:header("HOURLY FORECAST")
     local h = self.data and self.data.hourly
     if not h then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local now = self:localNow()
@@ -773,53 +770,46 @@ end
 -- Next 24 hours, like Apple Weather: icons every 3 h, a smooth temperature curve with the area below it filled,
 -- a time axis (a thin line at midnight) and hourly precipitation-chance bars.
 local CHART_HOURS, LABEL_EVERY = 24, 3
-local BLEND_HOURS = 4     -- the current temperature's offset from the forecast fades out over this many hours
-local MIN_CHANCE = 20     -- precipitation chances below this % aren't drawn
 function Dashboard:hourlyChart(h, first)
     local wide, W = self.landscape, self.W
     local n = math.min(CHART_HOURS, #h.time - first)   -- hourlyPrecipChance reads i + 1
-    local S = wide and { icon_h = 76, icon = 52, label_h = 50, curve_h = 330, temp = 38, axis_h = 54, axis = 34,
-                         gap = 26, title_h = 44, title = 26, bar_label_h = 40, bar_h = 140, pct = 30 }
-                   or { icon_h = 104, icon = 72, label_h = 64, curve_h = 460, temp = 48, axis_h = 68, axis = 40,
-                         gap = 44, title_h = 56, title = 30, bar_label_h = 48, bar_h = 240, pct = 34 }
+    local S = wide and { icon_h = 76, icon = 52, label_h = 48, curve_h = 250, temp = 36, axis_h = 52, axis = 32,
+                         gap = 26, title_h = 40, title = 26, bar_label_h = 38, bar_h = 110, pct = 28 }
+                   or { icon_h = 100, icon = 66, label_h = 58, curve_h = 380, temp = 42, axis_h = 64, axis = 36,
+                         gap = 44, title_h = 50, title = 30, bar_label_h = 46, bar_h = 200, pct = 32 }
     local margin = wide and 90 or 56
     local inner = wide and 50 or 46   -- half a label: the first and last points sit this far inside the margins
     local x0, x1 = margin + inner, W - margin - inner
     local function xAt(k) return x0 + k * (x1 - x0) / (CHART_HOURS - 1) end
 
-    -- The first point is "now": the current temperature instead of the hour's forecast. The forecast's error now
-    -- carries over into the next hours, so the difference fades out over BLEND_HOURS instead of a jump at hour 1.
-    local current = self.data.current.temperature_2m
-    local delta = current and current - h.temperature_2m[first] or 0
     local temps, times, icons, chances = {}, {}, {}, {}
-    local max_chance, max_k = 0, nil
+    local any_precip = false
     for k = 0, n - 1 do
         local i = first + k
         times[k] = parseWallTime(h.time[i])
-        temps[k + 1] = h.temperature_2m[i] + delta * math.max(0, 1 - k / BLEND_HOURS)
+        temps[k + 1] = h.temperature_2m[i]
         local _, icon = Weather.describe(h.weather_code[i], h.is_day and h.is_day[i] == 1)
         icons[k] = icon
         chances[k] = Weather.hourlyPrecipChance(h, i)
-        if chances[k] < MIN_CHANCE then chances[k] = 0 end
-        if chances[k] > max_chance then max_chance, max_k = chances[k], k end
+        any_precip = any_precip or chances[k] > 0
     end
-    local any_precip = max_k ~= nil
+    -- The first point is "now": the current observation instead of the hour's forecast.
     local _, now_icon = self:currentConditions()
     icons[0] = now_icon
+    temps[1] = self.data.current.temperature_2m or temps[1]
 
     local icon_top = 0
     local curve_top = icon_top + S.icon_h + S.label_h
     local curve_bottom = curve_top + S.curve_h
     local axis_top = curve_bottom + 10
     local title_top = axis_top + S.axis_h + S.gap
-    local bars_top = title_top + S.bar_label_h   -- the umbrella shares the row with the top bar's number
+    local bars_top = title_top + S.title_h + S.bar_label_h
     local bars_bottom = bars_top + S.bar_h
     local total_h = bars_bottom + 4
     if not any_precip then total_h = title_top + S.title_h + 20 end
 
     local f = Curve.monotone(temps)
-    -- At least 10 °C (18 °F) of height, so a steady day looks flat instead of a cliff.
-    local lo, hi = Curve.range(temps, self.settings.units == "imperial" and 18 or 10)
+    local lo, hi = Curve.range(temps, 6)
     local function yAt(v) return curve_bottom - 18 - (v - lo) / (hi - lo) * (S.curve_h - 36) end
     local midnights = {}
     for k = 1, n - 1 do
@@ -831,7 +821,7 @@ function Dashboard:hourlyChart(h, first)
     table.insert(og, Canvas:new{ w = W, h = total_h, draw = function(bb, x, y)
         -- midnight lines behind everything
         for _, k in ipairs(midnights) do
-            bb:paintRect(x + math.floor(xAt(k)), y + curve_top - S.label_h + 8, 2, axis_top - curve_top + S.label_h, LIGHT)
+            bb:paintRect(x + math.floor(xAt(k)), y + curve_top - S.label_h + 8, 2, axis_top - curve_top + S.label_h - 8, LIGHT)
         end
         -- fill and curve, one pixel column at a time
         local last_x = math.floor(xAt(n - 1))
@@ -866,58 +856,16 @@ function Dashboard:hourlyChart(h, first)
         end
     end })
 
-    -- Time axis: "Now", then every 3 hours from now. Midnight puts the new day's name on the axis, starting at its
-    -- line (clock labels it would overlap are dropped); if even that would touch "Now", the name goes at the line's top.
-    local axis = {}   -- { widget, left, right }
-    local function overlaps(l, r)
-        for _, a in ipairs(axis) do
-            if l < a.right + 6 and r > a.left - 6 then return a end
-        end
-    end
-    local function add(widget, left, keep)
-        local right = left + widget:getSize().w
-        local other = overlaps(left, right)
-        while other and keep do
-            for i, a in ipairs(axis) do if a == other then table.remove(axis, i) end end
-            other = overlaps(left, right)
-        end
-        if other then return end
-        table.insert(axis, { widget = widget, left = left, right = right })
-    end
-    local now_label = txt(self:tr("Now"), BOLD, S.axis)
-    local now_left = math.max(0, x0 - now_label:getSize().w / 2)
-    table.insert(axis, { widget = now_label, left = now_left, right = now_left + now_label:getSize().w })
     local weekday_format = self.settings.language == "zh" and "!%A" or "!%a"
     for _, k in ipairs(midnights) do
-        local name = self:tr(os.date(weekday_format, times[k]))
-        local day = txt(name, BOLD, S.axis)
-        local left = xAt(k) + 8
-        if left < axis[1].right + 6 then
-            local top = txt(name, BOLD, S.axis - 6, GRAY)
-            top.overlap_offset = { math.floor(left), curve_top - S.label_h + 6 }
-            table.insert(og, top)
-        else
-            add(day, left, true)
-        end
+        local day = txt(self:tr(os.date(weekday_format, times[k])), BOLD, S.axis - 6, GRAY)
+        day.overlap_offset = { math.floor(xAt(k)) + 10, curve_top - S.label_h + 6 }
+        table.insert(og, day)
     end
     local clock_24h = self.settings.clock_24h
-    for k = LABEL_EVERY, n - 1, LABEL_EVERY do
-        local label = txt(clock_24h and os.date("!%H:%M", times[k]) or (os.date("!%I %p", times[k]):gsub("^0", "")),
-            SANS, S.axis, GRAY)
-        add(label, xAt(k) - label:getSize().w / 2)
-    end
-    for _, a in ipairs(axis) do
-        a.widget.overlap_offset = { math.floor(math.min(W - a.widget:getSize().w, a.left)), axis_top + 6 }
-        table.insert(og, a.widget)
-    end
-
-    local shown_icon
     for k = 0, n - 1, LABEL_EVERY do
         local x = xAt(k)
-        if icons[k] ~= shown_icon then   -- only where the weather changes, so "clears up at 4" stands out
-            place(og, txt(icons[k], ICONS, S.icon), x, icon_top + (S.icon_h - S.icon * 1.2) / 2, W)
-            shown_icon = icons[k]
-        end
+        place(og, txt(icons[k], ICONS, S.icon), x, icon_top + (S.icon_h - S.icon * 1.2) / 2, W)
         -- Above the highest bit of curve under the label, so a steep neighbour doesn't run through it.
         local temp = txt(deg(temps[k + 1]), BOLD, S.temp)
         local half = temp:getSize().w / 2 / (x1 - x0) * (CHART_HOURS - 1)
@@ -927,17 +875,22 @@ function Dashboard:hourlyChart(h, first)
             peak = math.min(peak, yAt(f(1 + at)))
         end
         place(og, temp, x, peak - temp:getSize().h - 10, W)
-    end
-    if any_precip then   -- only the highest bar gets a number; an umbrella marks the row
-        local pct = txt(max_chance .. "%", BOLD, S.pct)
-        place(og, pct, xAt(max_k), bars_bottom - math.floor(max_chance / 100 * S.bar_h + 0.5) - pct:getSize().h - 4, W)
-        local umbrella = txt(Weather.ICON.umbrella, ICONS, S.title + 10, GRAY)
-        if pct.overlap_offset[1] > margin + umbrella:getSize().w + 12 then   -- the top bar's number may be there
-            umbrella.overlap_offset = { margin, title_top - 4 }
-            table.insert(og, umbrella)
+        local label = k == 0 and self:tr("Now")
+            or clock_24h and os.date("!%H:%M", times[k]) or (os.date("!%I %p", times[k]):gsub("^0", ""))
+        place(og, txt(label, k == 0 and BOLD or SANS, S.axis, k == 0 and BLACK or GRAY), x, axis_top + 6, W)
+        if any_precip and chances[k] > 0 then   -- above this bar and its neighbours (the label is wider)
+            local bh = math.floor(math.max(chances[k], chances[k - 1] or 0, chances[k + 1] or 0) / 100 * S.bar_h + 0.5)
+            local pct = txt(chances[k] .. "%", SANS, S.pct, GRAY)
+            place(og, pct, x, bars_bottom - bh - pct:getSize().h - 4, W)
         end
+    end
+    local title = txt(self:tr(any_precip and "CHANCE OF PRECIP" or "No precipitation in the next 24 h"),
+        BOLD, S.title, GRAY)
+    if any_precip then
+        title.overlap_offset = { margin, title_top }
+        table.insert(og, title)
     else
-        place(og, txt(self:tr("No precipitation in the next 24 h"), BOLD, S.title, GRAY), W / 2, title_top, W)
+        place(og, title, W / 2, title_top, W)
     end
     return og
 end
@@ -961,7 +914,7 @@ function Dashboard:rangeBar(w, lo, hi, min_all, max_all, now_t)
 end
 
 function Dashboard:pageDaily()
-    local g = self:pageGroup()
+    local g = self:header("7-DAY FORECAST")
     local d = self.data and self.data.daily
     if not d then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local first, is_today = Weather.firstForecastDay(d, self:localNow())
@@ -971,7 +924,7 @@ function Dashboard:pageDaily()
     for i = first, last do
         min_all = math.min(min_all, d.temperature_2m_min[i]); max_all = math.max(max_all, d.temperature_2m_max[i])
     end
-    local rowW, rowH = self.W - 120, self.landscape and 122 or 174
+    local rowW, rowH = self.W - 120, self.landscape and 105 or 157
     local barWidth = rowW - 170 - 110 - 120 - 28 - 28 - 120
     for i = first, last do
         local _, icon = Weather.describe(d.weather_code[i], true)
@@ -1016,14 +969,14 @@ function Dashboard:tile(icon, label, value, sub, w, h)
 end
 
 function Dashboard:pageDetails()
-    local g = self:pageGroup()
+    local g = self:header("DETAILS")
     local d = self.data
     if not d then table.insert(g, txt(self:tr("No data"), SANS, 48, GRAY)); return g end
     local W, c, day, I = Weather, d.current, d.daily, Weather.ICON
     local units = (type(d.current_units) == "table" and d.current_units.wind_speed_10m) or "km/h"
     if units == "mp/h" then units = "mph" end   -- Open-Meteo's spelling
     local punits = d.daily_units.precipitation_sum or "mm"
-    local columns, th, gap = self.landscape and 4 or 2, self.landscape and 330 or 292, 22
+    local columns, th, gap = self.landscape and 4 or 2, self.landscape and 340 or 263, 22
     local tw = math.floor((self.W - 80 - (columns - 1) * gap) / columns)
     local now = self:localNow()
     local today, is_today = W.firstForecastDay(day, now)
@@ -1080,20 +1033,21 @@ function Dashboard:pageDetails()
     return g
 end
 
--- Battery percentage in the footer of pages 2–4 (next to the time); page 1 only shows the low-battery warning.
+-- Battery percentage on pages 2–4; page 1 only shows the low-battery warning.
 function Dashboard:batteryBadge()
     local pct = self.demo and 15 or (Device:isKindle() and self:batteryLevel())
     if not pct then return nil end
     local low = self.demo or (pct <= LOW_BATTERY and not self:onExternalPower())
-    local I = Weather.ICON
     if not low then
         if self.page == 1 then return nil end
+        local I = Weather.ICON
         local icon = pct > 87 and I.battery_full or pct > 62 and I.battery_three_quarters
             or pct > 37 and I.battery_half or pct > 12 and I.battery_low or I.battery_empty
-        return HorizontalGroup:new{ align = "center",
-            txt(icon, ICONS, 30, GRAY), hspan(20), txt(pct .. "%", SANS, 34, GRAY) }
+        return HorizontalGroup:new{ align = "center", overlap_offset = { 40, self.H - 96 },
+            txt(icon, ICONS, 30, GRAY), hspan(24), txt(pct .. "%", SANS, 34, GRAY) }
     end
-    return HorizontalGroup:new{ align = "center",
+    local I = Weather.ICON
+    return HorizontalGroup:new{ align = "center", overlap_offset = { 40, self.H - 96 },
         txt(pct <= 5 and I.battery_empty or I.battery_low, ICONS, 40), hspan(24),
         txt(pct .. "%  " .. self:tr("Charge me"), BOLD, 34) }
 end
@@ -1111,15 +1065,9 @@ function Dashboard:rebuild()
         CenterContainer:new{ dimen = Geom:new{ w = self.W, h = self.H - (self.page == 1 and 88 or 120) }, ignore_if_over = "height",
             VerticalGroup:new{ align = "center", content } },
     }
-    if self.page ~= 1 then
-        table.insert(page, self:footer())
-    else
-        local badge = self:batteryBadge()
-        if badge then
-            badge.overlap_offset = { 40, self.H - 96 }
-            table.insert(page, badge)
-        end
-    end
+    if self.page ~= 1 then table.insert(page, self:footer()) end
+    local badge = self:batteryBadge()
+    if badge then table.insert(page, badge) end
     if self.show_settings then table.insert(page, self:settingsPanel()) end
     self[1] = FrameContainer:new{
         width = self.W, height = self.H, background = WHITE, bordersize = 0, padding = 0, margin = 0, page,
