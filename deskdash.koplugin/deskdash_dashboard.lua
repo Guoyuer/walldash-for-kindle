@@ -770,6 +770,7 @@ end
 -- Next 24 hours, like Apple Weather: icons every 3 h, a smooth temperature curve with the area below it filled,
 -- a time axis (a thin line at midnight) and hourly precipitation-chance bars.
 local CHART_HOURS, LABEL_EVERY = 24, 3
+local BLEND_HOURS = 4     -- the current temperature's offset from the forecast fades out over this many hours
 function Dashboard:hourlyChart(h, first)
     local wide, W = self.landscape, self.W
     local n = math.min(CHART_HOURS, #h.time - first)   -- hourlyPrecipChance reads i + 1
@@ -782,21 +783,23 @@ function Dashboard:hourlyChart(h, first)
     local x0, x1 = margin + inner, W - margin - inner
     local function xAt(k) return x0 + k * (x1 - x0) / (CHART_HOURS - 1) end
 
+    -- The first point is "now": the current temperature instead of the hour's forecast. The forecast's error now
+    -- carries over into the next hours, so the difference fades out over BLEND_HOURS instead of a jump at hour 1.
+    local current = self.data.current.temperature_2m
+    local delta = current and current - h.temperature_2m[first] or 0
     local temps, times, icons, chances = {}, {}, {}, {}
     local any_precip = false
     for k = 0, n - 1 do
         local i = first + k
         times[k] = parseWallTime(h.time[i])
-        temps[k + 1] = h.temperature_2m[i]
+        temps[k + 1] = h.temperature_2m[i] + delta * math.max(0, 1 - k / BLEND_HOURS)
         local _, icon = Weather.describe(h.weather_code[i], h.is_day and h.is_day[i] == 1)
         icons[k] = icon
         chances[k] = Weather.hourlyPrecipChance(h, i)
         any_precip = any_precip or chances[k] > 0
     end
-    -- The first point is "now": the current observation instead of the hour's forecast.
     local _, now_icon = self:currentConditions()
     icons[0] = now_icon
-    temps[1] = self.data.current.temperature_2m or temps[1]
 
     local icon_top = 0
     local curve_top = icon_top + S.icon_h + S.label_h
@@ -809,7 +812,8 @@ function Dashboard:hourlyChart(h, first)
     if not any_precip then total_h = title_top + S.title_h + 20 end
 
     local f = Curve.monotone(temps)
-    local lo, hi = Curve.range(temps, 6)
+    -- At least 10 °C (18 °F) of height, so a steady day looks flat instead of a cliff.
+    local lo, hi = Curve.range(temps, self.settings.units == "imperial" and 18 or 10)
     local function yAt(v) return curve_bottom - 18 - (v - lo) / (hi - lo) * (S.curve_h - 36) end
     local midnights = {}
     for k = 1, n - 1 do
