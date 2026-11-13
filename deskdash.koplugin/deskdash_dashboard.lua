@@ -36,7 +36,7 @@ local WHITE = Blitbuffer.COLOR_WHITE
 -- E-ink contrast is low: keep "secondary" text dark and rules/tracks clearly visible.
 local GRAY = Blitbuffer.Color8(0x33)   -- secondary text
 local LIGHT = Blitbuffer.Color8(0x99)  -- separators, range-bar track
-local FILL = Blitbuffer.Color8(0xCC)   -- area under the hourly temperature curve
+local FILL = Blitbuffer.Color8(0xDD)   -- area under the hourly temperature curve
 
 local SANS, BOLD, ICONS = "NotoSans-Regular.ttf", "NotoSans-Bold.ttf", "nerdfonts/symbols.ttf"
 local HEAVY = BOLD   -- big numerals (KOReader can't see the Kindle's Amazon Ember)
@@ -767,23 +767,35 @@ function Dashboard:pageHourly()
     return g
 end
 
--- Next 24 hours, like Apple Weather: icons every 3 h, a smooth temperature curve with the area below it filled,
--- a time axis (a thin line at midnight) and hourly precipitation-chance bars.
-local CHART_HOURS, LABEL_EVERY = 24, 3
-local PRECIP_LABEL_MIN = 20   -- % below which a 3-hour block's number is left blank
+-- Next 24 hours, like Apple Weather: a smooth temperature curve with the area below it filled, labelled at "now"
+-- and at every even clock hour (so midnight is always a label: the day's name), an icon above every second label,
+-- and hourly precipitation-chance bars.
+local CHART_HOURS, LABEL_EVERY = 24, 2
+local PRECIP_LABEL_MIN = 20   -- % below which a block's number is left blank
+-- The largest size up to px at which the widest of texts fits max_w, so a row of labels shares one size.
+local function rowPx(texts, fname, px, max_w)
+    local widest = 1
+    for _, s in ipairs(texts) do
+        local w = txt(s, fname, px)
+        widest = math.max(widest, w:getSize().w)
+        w:free()
+    end
+    return math.min(px, math.floor(px * max_w / widest))
+end
 local BLEND_HOURS = 4     -- the current temperature's offset from the forecast fades out over this many hours
 function Dashboard:hourlyChart(h, first)
     local wide, W = self.landscape, self.W
     local n = math.min(CHART_HOURS, #h.time - first)   -- hourlyPrecipChance reads i + 1
     -- Sizes for reading across a room; curve_h and bar_h are fallbacks, the chart normally fills body_h.
-    local S = wide and { icon_h = 84, icon = 60, label_h = 62, curve_h = 250, temp = 46, axis_h = 54, axis = 34,
-                         gap = 22, title_h = 40, title = 26, bar_label_h = 54, bar_h = 110, pct = 36 }
-                   or { icon_h = 108, icon = 76, label_h = 80, curve_h = 380, temp = 58, axis_h = 64, axis = 40,
-                         gap = 36, title_h = 50, title = 30, bar_label_h = 64, bar_h = 200, pct = 42 }
+    local S = wide and { icon_h = 84, icon = 64, label_h = 76, curve_h = 250, temp = 54, axis_h = 64, axis = 42,
+                         gap = 18, title_h = 42, title = 28, bar_label_h = 62, bar_h = 110, pct = 42 }
+                   or { icon_h = 112, icon = 84, label_h = 88, curve_h = 380, temp = 62, axis_h = 76, axis = 50,
+                         gap = 28, title_h = 54, title = 34, bar_label_h = 72, bar_h = 200, pct = 48 }
     local margin = wide and 90 or 56
     local inner = wide and 50 or 46   -- half a label: the first and last points sit this far inside the margins
     local x0, x1 = margin + inner, W - margin - inner
     local function xAt(k) return x0 + k * (x1 - x0) / (CHART_HOURS - 1) end
+    local col_w = math.floor(xAt(LABEL_EVERY) - x0)   -- room for one label
 
     -- The first point is "now": the current temperature instead of the hour's forecast. The forecast's error now
     -- carries over into the next hours, so the difference fades out over BLEND_HOURS instead of a jump at hour 1.
@@ -803,6 +815,11 @@ function Dashboard:hourlyChart(h, first)
     end
     local _, now_icon = self:currentConditions()
     icons[0] = now_icon
+    -- Labelled points: "now", then the even clock hours (one right after "now" has no room).
+    local marks, is_mark = { 0 }, { [0] = true }
+    for k = 2, n - 1 do
+        if tonumber(os.date("!%H", times[k])) % LABEL_EVERY == 0 then marks[#marks + 1], is_mark[k] = k, true end
+    end
 
     -- Fill the space between the page title and the footer (self.body_h): the fixed rows keep their size, the curve
     -- and the bars share the rest.
@@ -820,17 +837,22 @@ function Dashboard:hourlyChart(h, first)
     local curve_top = icon_top + S.icon_h + S.label_h
     local curve_bottom = curve_top + S.curve_h
     local axis_top = curve_bottom + 10
-    local title_top = axis_top + S.axis_h + S.gap
-    local bars_top = title_top + S.title_h + S.bar_label_h
+    -- The bars hang from the time axis (each right under its hour), their numbers stand below them, then the title.
+    local bars_top = axis_top + S.axis_h + 8
     local bars_bottom = bars_top + S.bar_h
-    local total_h = bars_bottom + 4
-    if not any_precip then total_h = title_top + S.title_h + 20 end
+    local pct_top = bars_bottom + 8
+    local total_h = axis_top + S.axis_h + S.gap + S.title_h + S.bar_label_h + S.bar_h + 4
+    local title_top = total_h - S.title_h
+    if not any_precip then
+        title_top = axis_top + S.axis_h + S.gap
+        total_h = title_top + S.title_h + 20
+    end
 
-    -- The curve goes through the labelled 3-hour points (and the last hour) only, so points labelled alike sit level
+    -- The curve goes through the labelled points (and the last hour) only, so points labelled alike sit level
     -- and rounding the hours in between doesn't add steps or notches.
     local cx, cy = {}, {}
     for k = 0, n - 1 do
-        if k % LABEL_EVERY == 0 or k == n - 1 then cx[#cx + 1], cy[#cy + 1] = k + 1, temps[k + 1] end
+        if is_mark[k] or k == n - 1 then cx[#cx + 1], cy[#cy + 1] = k + 1, temps[k + 1] end
     end
     local f = Curve.monotone(cy, cx)
     -- At least 6 °C (11 °F) of height, so a steady day doesn't look like a cliff. The extra height goes below the
@@ -844,12 +866,8 @@ function Dashboard:hourlyChart(h, first)
     end
 
     local og = OverlapGroup:new{ dimen = Geom:new{ w = W, h = total_h } }
-    local line_w = wide and 4 or 5
+    local line_w = wide and 5 or 6
     table.insert(og, Canvas:new{ w = W, h = total_h, draw = function(bb, x, y)
-        -- midnight: a short tick across the baseline down to the axis, where the day's name stands
-        for _, k in ipairs(midnights) do
-            bb:paintRect(x + math.floor(xAt(k)), y + curve_bottom - 24, 3, 24 + 10 + S.axis_h - 12, GRAY)
-        end
         -- fill and curve, one pixel column at a time
         local last_x = math.floor(xAt(n - 1))
         local prev
@@ -864,8 +882,9 @@ function Dashboard:hourlyChart(h, first)
         end
         bb:paintRect(x + math.floor(x0), y + curve_bottom, last_x - math.floor(x0) + 1, 2, LIGHT)   -- baseline
         -- dots on the labelled points; "now" is a white dot with a black ring
-        for k = LABEL_EVERY, n - 1, LABEL_EVERY do
-            bb:paintCircle(x + math.floor(xAt(k)), y + math.floor(yAt(temps[k + 1]) + 0.5), wide and 6 or 7, BLACK)
+        for m = 2, #marks do
+            local k = marks[m]
+            bb:paintCircle(x + math.floor(xAt(k)), y + math.floor(yAt(temps[k + 1]) + 0.5), wide and 8 or 9, BLACK)
         end
         local r = wide and 11 or 13
         local cx, cy = x + math.floor(x0), y + math.floor(yAt(temps[1]) + 0.5)
@@ -873,42 +892,41 @@ function Dashboard:hourlyChart(h, first)
         bb:paintCircle(cx, cy, r, BLACK, 4)
         if any_precip then   -- precipitation-chance bars
             local bw = math.max(6, math.floor((x1 - x0) / (CHART_HOURS - 1) * 0.55))
-            bb:paintRect(x + math.floor(x0 - bw / 2), y + bars_bottom, last_x - math.floor(x0) + bw, 2, LIGHT)
+            bb:paintRect(x + math.floor(x0 - bw / 2), y + bars_top - 2, last_x - math.floor(x0) + bw, 2, LIGHT)
             for k = 0, n - 1 do
                 local bh = math.floor(chances[k] / 100 * S.bar_h + 0.5)
                 if bh > 0 then
-                    bb:paintRect(x + math.floor(xAt(k) - bw / 2), y + bars_bottom - bh, bw, bh, GRAY)
+                    bb:paintRect(x + math.floor(xAt(k) - bw / 2), y + bars_top, bw, bh, GRAY)
                 end
             end
         end
     end })
 
-    -- Midnight's day name goes on the time axis just right of its tick, replacing a clock label it would overlap.
-    -- Within an hour of "Now" there's no room on the axis: it sits on the fill just above the baseline instead.
-    local now_label = txt(self:tr("Now"), BOLD, S.axis)
-    local now_right = x0 + now_label:getSize().w / 2
-    local days = {}   -- { left, right } of day names on the axis
-    local weekday_format = self.settings.language == "zh" and "!%A" or "!%a"
-    for _, k in ipairs(midnights) do
-        local name = self:tr(os.date(weekday_format, times[k]))
-        local left = math.floor(xAt(k)) + 12
-        local day = txt(name, BOLD, S.axis)
-        if left < now_right + 10 then
-            day:free()
-            day = txt(name, BOLD, S.axis - 8, GRAY)
-            day.overlap_offset = { left, curve_bottom - day:getSize().h - 6 }
-        else
-            day.overlap_offset = { left, axis_top + 6 }
-            days[#days + 1] = { left = left, right = left + day:getSize().w }
-        end
-        table.insert(og, day)
-    end
+    -- Each row of labels shares one size, the largest at which its widest label fits a column. To leave room for
+    -- big digits the units are dropped: bare degrees on the curve, bare hours on the axis ("04"; in 12-hour mode
+    -- "4", where midnight's day name tells the halves apart), and the "%" moves into the bars' title.
     local clock_24h = self.settings.clock_24h
-    for k = 0, n - 1, LABEL_EVERY do
+    local weekday_format = self.settings.language == "zh" and "!%A" or "!%a"
+    local temp_s, hour_s, pct_s = {}, {}, {}
+    for m, k in ipairs(marks) do
+        temp_s[m] = string.format("%d", temps[k + 1])
+        local hour = tonumber(os.date("!%H", times[k]))
+        hour_s[m] = clock_24h and string.format("%02d", hour) or tostring((hour + 11) % 12 + 1)
+        -- The highest chance from this label up to the next (so a peak between two labels isn't missed).
+        local block = 0
+        for j = k, (marks[m + 1] or n) - 1 do block = math.max(block, chances[j]) end
+        pct_s[m] = any_precip and block >= PRECIP_LABEL_MIN and tostring(block) or ""
+    end
+    local temp_px = rowPx(temp_s, BOLD, S.temp, col_w - 8)
+    local hour_px = rowPx(hour_s, BOLD, S.axis, col_w - 12)
+    local pct_px = rowPx(pct_s, BOLD, S.pct, col_w - 12)
+    for m, k in ipairs(marks) do
         local x = xAt(k)
-        place(og, txt(icons[k], ICONS, S.icon), x, icon_top + (S.icon_h - S.icon * 1.2) / 2, W)
+        if m % 2 == 1 then   -- an icon above every second label: twice the room, so they can be big
+            place(og, txt(icons[k], ICONS, S.icon), x, icon_top + (S.icon_h - S.icon * 1.2) / 2, W)
+        end
         -- Above the highest bit of curve under the label, so a steep neighbour doesn't run through it.
-        local temp = txt(deg(temps[k + 1]), BOLD, S.temp)
+        local temp = txt(temp_s[m], BOLD, temp_px)
         local half = temp:getSize().w / 2 / (x1 - x0) * (CHART_HOURS - 1)
         local peak = math.huge
         for s = -10, 10 do
@@ -917,32 +935,34 @@ function Dashboard:hourlyChart(h, first)
         end
         place(og, temp, x, peak - temp:getSize().h - 10, W)
         if k == 0 then
-            place(og, now_label, x, axis_top + 6, W)
+            -- "Now" is wider than a column: it's a size smaller and grows to the left, into the margin.
+            local now_px = math.floor(S.axis * 0.8)
+            local now_label = fitTxt(self:tr("Now"), BOLD, now_px, BLACK, x0 + col_w / 2 - 20, 28)
+            now_label.overlap_offset = { math.floor(x0 + col_w / 2 - 12 - now_label:getSize().w),
+                math.floor(axis_top + 6 + (S.axis - now_px) * 0.9) }
+            table.insert(og, now_label)
+        elseif os.date("!%H", times[k]) == "00" then
+            -- A day name wider than its column shrinks; it stays on the hours' baseline.
+            local name = self:tr(os.date(weekday_format, times[k]))
+            local day_px = rowPx({ name }, BOLD, S.axis, col_w)
+            place(og, txt(name, BOLD, day_px, BLACK), x, axis_top + 6 + (S.axis - day_px) * 0.9, W)
         else
-            local label = txt(clock_24h and os.date("!%H:%M", times[k]) or (os.date("!%I %p", times[k]):gsub("^0", "")),
-                SANS, S.axis, GRAY)
-            local half, clash = label:getSize().w / 2, false
-            for _, d in ipairs(days) do
-                if x - half < d.right + 10 and x + half > d.left - 10 then clash = true end
-            end
-            if clash then label:free() else place(og, label, x, axis_top + 6, W) end
+            place(og, txt(hour_s[m], BOLD, hour_px, GRAY), x, axis_top + 6 + (S.axis - hour_px) * 0.6, W)
         end
-        -- One row of numbers above the bars, aligned with the time axis: the highest chance in each 3-hour block
-        -- (so a peak between two labels isn't missed); blank below PRECIP_LABEL_MIN.
-        local block = 0
-        for j = k, math.min(k + LABEL_EVERY - 1, n - 1) do block = math.max(block, chances[j]) end
-        if any_precip and block >= PRECIP_LABEL_MIN then
-            place(og, txt(block .. "%", SANS, S.pct, GRAY), x, bars_top - S.bar_label_h, W)
+        if pct_s[m] ~= "" then
+            place(og, txt(pct_s[m], BOLD, pct_px, GRAY), x, pct_top, W)
         end
     end
-    local title = txt(self:tr(any_precip and "CHANCE OF PRECIP" or "No precipitation in the next 24 h"),
-        BOLD, S.title, GRAY)
-    if any_precip then
-        title.overlap_offset = { margin, title_top }
-        table.insert(og, title)
-    else
-        place(og, title, W / 2, title_top, W)
+    -- Midnight one hour from "now" has no label on the axis: its day name sits on the fill above the baseline.
+    if midnights[1] == 1 then
+        local day = txt(self:tr(os.date(weekday_format, times[1])), BOLD, S.axis - 8, GRAY)
+        day.overlap_offset = { math.floor(xAt(1)) + 12, curve_bottom - day:getSize().h - 6 }
+        table.insert(og, day)
     end
+    -- Under the numbers it's a caption that finishes their sentence ("20 50 55 … % chance of precip"), centred.
+    local caption = self.settings.language == "zh" and self:tr("CHANCE OF PRECIP") .. " %" or "% CHANCE OF PRECIP"
+    place(og, txt(any_precip and caption or self:tr("No precipitation in the next 24 h"), BOLD, S.title, GRAY),
+        W / 2, title_top, W)
     return og
 end
 
