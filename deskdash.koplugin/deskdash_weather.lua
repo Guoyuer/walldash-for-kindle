@@ -232,11 +232,72 @@ local function nws(path)
     return decode(curl(r.url, r.headers))
 end
 
+--- NWS observation text -> headline, rest (or nil) for the home page's two condition lines. NWS joins every reported
+--- phenomenon with " and " ("Heavy Thunderstorms and Heavy Rain and Thunderstorms and Hail and Fog/Mist"), strongest
+--- first. Parts repeated inside another ("Thunderstorms" in "Heavy Thunderstorms") are dropped. The headline skips
+--- wind, and sky/visibility when there is precipitation, and keeps leading parts while they fit in max_len characters;
+--- everything else goes to rest, joined with " · ": "Light Rain and Fog/Mist" -> "Light Rain", "Fog/Mist".
+local PRECIP_WORDS = { "rain", "snow", "drizzle", "thunder", "hail", "sleet", "pellets", "shower", "freezing",
+                       "ice", "squall", "graupel", "precipitation", "funnel", "tornado" }
+local WIND_PARTS = { windy = true, breezy = true }
+function Weather.shortText(text, max_len)
+    max_len = max_len or 20
+    text = (text or ""):gsub("%s+", " "):gsub("^ ", ""):gsub(" $", "")   -- NWS sometimes sends "Light  Snow"
+    local parts = {}
+    for p in (text .. " and "):gmatch("(.-) and ") do
+        if p ~= "" then table.insert(parts, p) end
+    end
+    if #parts <= 1 then return text end
+    -- Thunder decides the icon (obsCode), so lead with it: "Light Rain and Thunderstorms" -> "Thunderstorms".
+    for i = 2, #parts do
+        if parts[i]:lower():find("thunder", 1, true) and not parts[1]:lower():find("thunder", 1, true) then
+            table.insert(parts, 1, table.remove(parts, i))
+            break
+        end
+    end
+    local function precip(p)
+        local s = p:lower()
+        for _, w in ipairs(PRECIP_WORDS) do
+            if s:find(w, 1, true) then return true end
+        end
+    end
+    local unique = {}
+    for i, p in ipairs(parts) do
+        local dup = false
+        for j, q in ipairs(parts) do
+            -- a part repeated inside another (or an exact repeat earlier on) adds nothing
+            if j ~= i and (q == p and j < i or q ~= p and q:find(p, 1, true)) then dup = true end
+        end
+        if not dup then table.insert(unique, p) end
+    end
+    local any_precip = false
+    for _, p in ipairs(unique) do any_precip = any_precip or precip(p) end
+    local candidates = {}
+    for _, p in ipairs(unique) do
+        if not WIND_PARTS[p:lower()] and (precip(p) or not any_precip) then table.insert(candidates, p) end
+    end
+    local head = { candidates[1] or unique[1] }   -- "Windy and Breezy" has no candidate
+    local len = #head[1]
+    for i = 2, #candidates do
+        if len + 5 + #candidates[i] > max_len then break end
+        table.insert(head, candidates[i])
+        len = len + 5 + #candidates[i]
+    end
+    local in_head, rest = {}, {}
+    for _, p in ipairs(head) do in_head[p] = true end
+    for _, p in ipairs(unique) do
+        if not in_head[p] then table.insert(rest, p) end
+    end
+    return table.concat(head, " and "), #rest > 0 and table.concat(rest, " · ") or nil
+end
+
 --- NWS observation text ("Mostly Cloudy", "Light Rain and Fog/Mist", ...) -> WMO weather code, or nil if unknown.
 function Weather.obsCode(text)
     local s = (text or ""):lower()
     if s == "" then return nil end
     local function has(w) return s:find(w, 1, true) ~= nil end
+    -- "Unknown Precipitation (and Fog)": the station can't tell rain from snow; the model can.
+    if has("unknown") then return nil end
     if has("thunder") then return 95 end
     if has("freezing") or has("sleet") or has("ice pellets") then return 66 end
     if has("snow") then return has("light") and 71 or (has("heavy") and 75 or 73) end
