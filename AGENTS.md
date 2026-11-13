@@ -64,8 +64,10 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   dashboard at KOReader start, reopens it after 5 idle minutes, starts sshd. Plugin-local modules must be `require`d
   at load time and are prefixed `deskdash_` to avoid name clashes.
 - `deskdash_weather.lua`: one Open-Meteo request for `best_match` and NBM. Hourly and daily forecasts use NBM together,
-  with a whole-forecast fallback to `best_match`. The homepage precipitation hint uses the same hourly interval
-  and probability as the hourly page. Current model estimates and daily UV come from `best_match`.
+  with a whole-forecast fallback to `best_match`. The homepage precipitation line is the 15-minute nowcast
+  (`Weather.nowcast`: "Rain in ~25 min" / "stopping in" / "for the next"; `minutely_15` precipitation + snowfall,
+  13 steps, always `best_match` = NOAA RRFS, native 15 min; NBM's 15-min values are interpolated hourly ones),
+  falling back to `Weather.precipSummary` (same hourly interval and probability as the hourly page). Current model estimates and daily UV come from `best_match`.
   CAMS AQI (labelled as an estimate) + NWS alerts (api.weather.gov, US only; fetched even if the forecast fails) + computed moon phase +
   ip-api location/UTC offset, via the system `curl`.
   **Current conditions come from the nearest NWS station's latest observation** (`Weather.observation`, station
@@ -77,7 +79,11 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
   (**must run with `LD_LIBRARY_PATH=`** inside KOReader). `deskdash_weather_job.lua` runs Wi-Fi wait and HTTP
   requests in one subprocess. The UI keeps using cached data and collects results asynchronously.
   Weather glyphs from KOReader's `nerdfonts/symbols.ttf`.
-- `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details). Swipe = page,
+- `deskdash_curve.lua`: pure chart math (Fritsch–Carlson monotone cubic, range padding), tested in `tests/run.lua`.
+- `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details).
+  Hourly = a 24 h chart (`hourlyChart`, `forecast_hours=27`): icons every 3 h, temperature curve with a gray
+  fill, time axis with a midnight line, hourly precipitation-chance bars. Drawn by a `Canvas` widget (Blitbuffer
+  has no line primitive: the curve is 1 px `paintRect` columns), labels via `OverlapGroup` offsets. Swipe = page,
   tap = refresh, long-press = close. Ticks on each minute; weather at fixed wall-clock slots a few minutes
   after NWS stations report: :03/:18/:33/:48 plugged in, :03 on battery (`WEATHER_STEP*`, `Weather.secondsToSlot`;
   failed automatic requests back off from 1 min to at most 15 min). The worker sends forecast, alerts, observation
