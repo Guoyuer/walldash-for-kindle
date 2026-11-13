@@ -82,7 +82,9 @@ KOReader plugin (installed to `/mnt/us/koreader/plugins/deskdash.koplugin`). Men
 - `deskdash_curve.lua`: pure chart math (Fritsch–Carlson monotone cubic, range padding), tested in `tests/run.lua`.
 - `deskdash_dashboard.lua`: full-screen InputContainer, 4 pages (Now / Hourly / 7-Day / Details).
   Hourly = a 24 h chart (`hourlyChart`, `forecast_hours=27`): icons every 3 h, temperature curve with a gray
-  fill, time axis with a midnight line, hourly precipitation-chance bars. Drawn by a `Canvas` widget (Blitbuffer
+  fill (whole degrees through the labelled 3-hour points only; the current temperature's offset from the forecast
+  fades out over 4 h; at least 10 °C / 18 °F of height), time axis with a midnight line, hourly
+  precipitation-chance bars under one aligned row of numbers (highest chance per 3-hour block, blank < 20 %). Drawn by a `Canvas` widget (Blitbuffer
   has no line primitive: the curve is 1 px `paintRect` columns), labels via `OverlapGroup` offsets. Swipe = page,
   tap = refresh, long-press = close. Ticks on each minute; weather at fixed wall-clock slots a few minutes
   after NWS stations report: :03/:18/:33/:48 plugged in, :03 on battery (`WEATHER_STEP*`, `Weather.secondsToSlot`;
