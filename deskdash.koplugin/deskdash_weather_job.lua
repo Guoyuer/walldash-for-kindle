@@ -22,7 +22,7 @@ local function waitForWifi()
     return false
 end
 
--- opts: settings, offset, station, kindle, benchmark, want_aq
+-- opts: settings, station, kindle, benchmark, want_aq
 local function collect(opts, pid)
     local settings = opts.settings
     local sample = Bench.start(opts.benchmark, "weather")
@@ -37,10 +37,10 @@ local function collect(opts, pid)
     end
 
     local lat, lon = settings.lat, settings.lon
-    if not (lat and lon and opts.offset) then
+    if not (lat and lon) then
         local loc = Weather.locate()
         if loc then
-            lat, lon = lat or loc.lat, lon or loc.lon
+            lat, lon = loc.lat, loc.lon
             result.location = loc
         end
     end
