@@ -34,11 +34,11 @@ ssh-keygen -t ed25519 -f ~/.ssh/kindle_ed25519
 
 Via USB, copy `kdev/sshd.sh` to `kdev/sshd.sh` on the Kindle drive and your **public** key to `kdev/authorized_keys`. The key stays local to your setup. Copy `documents/SSH_Start.sh` to the Kindle's `documents/` folder, eject the drive, and run **SSH - Start** from the library. The plugin also runs the helper at KOReader startup if it is installed. The helper starts root SSH with public-key authentication and permits port 22 on the Wi-Fi interface from `192.168.0.0/16`. Adjust both subnet rules in your local copy of the helper if your network uses a different range.
 
-In the computer's `~/.ssh/config`, replace the example IP with the Kindle's Wi-Fi IP:
+In the computer's `~/.ssh/config`, replace `<kindle-wifi-ip>` with the device's Wi-Fi IP:
 
 ```sshconfig
 Host kindle
-    HostName 192.168.1.50
+    HostName <kindle-wifi-ip>
     User root
     IdentityFile ~/.ssh/kindle_ed25519
     IdentitiesOnly yes
@@ -54,4 +54,6 @@ python tools/kctl.py dash next
 sh tools/deploy_dash.sh --shots
 ```
 
-The deploy helper assumes the KPM KOReader layout. It runs the local checks, uploads the plugin, restarts KOReader, verifies the first paint, and restores the previous plugin if startup fails. Send dashboard commands one at a time. For benchmark procedures and the device architecture, see [performance benchmarks](docs/performance-benchmarks.md) and [AGENTS.md](AGENTS.md).
+The deploy helper assumes the KPM KOReader layout. It runs the local checks, uploads the plugin, restarts KOReader, verifies the first paint, and restores the previous plugin if startup fails. Send dashboard commands one at a time.
+
+See [power and latency testing](docs/performance-benchmarks.md) for hardware benchmarks and [weather sources](docs/weather-accuracy.md) for provider selection and fallbacks.
