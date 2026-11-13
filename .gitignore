@@ -6,3 +6,6 @@ tools/inbox/
 ref/
 
 __pycache__/
+
+# Per-device SSH authorization
+/kdev/authorized_keys

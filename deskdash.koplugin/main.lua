@@ -3,6 +3,12 @@ Desk dashboard plugin: turns KOReader into a wall clock + weather display.
 
 Menu: Tools > Desk dashboard. Opens automatically when KOReader starts (toggle in the menu).
 ]]
+local Device = require("device")
+local is_pw4 = Device.model == "KindlePaperWhite4"
+if not is_pw4 and not (Device.isSDL and Device:isSDL()) then
+    return { disabled = true }
+end
+
 local Dispatcher = require("dispatcher")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
@@ -35,7 +41,7 @@ function DeskDash:init()
     -- This Kindle is only a wall clock and the dashboard does its own suspending, so KOReader's autosuspend
     -- plugin stays off (Tools > More tools > Plugin management turns it back on). Applies from the next start.
     local disabled = G_reader_settings:readSetting("plugins_disabled") or {}
-    if not disabled.autosuspend then
+    if is_pw4 and not disabled.autosuspend then
         disabled.autosuspend = true
         G_reader_settings:saveSetting("plugins_disabled", disabled)
         require("logger").info("deskdash: disabled the autosuspend plugin (after the next KOReader start)")
@@ -45,7 +51,9 @@ function DeskDash:init()
     if setting("autostart", true) and not DeskDash._autostarted then
         DeskDash._autostarted = true
         -- Start the key-only SSH server for remote maintenance (no-op if it's running or not installed).
-        os.execute("[ -f /mnt/us/kdev/sshd.sh ] && LD_LIBRARY_PATH= setsid sh /mnt/us/kdev/sshd.sh >/dev/null 2>&1 </dev/null &")
+        if is_pw4 then
+            os.execute("[ -f /mnt/us/kdev/sshd.sh ] && LD_LIBRARY_PATH= setsid sh /mnt/us/kdev/sshd.sh >/dev/null 2>&1 </dev/null &")
+        end
         UIManager:scheduleIn(1, function() self:onShowDeskDash() end)
         UIManager:scheduleIn(60, DeskDash._watchdog)
     end
