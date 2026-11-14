@@ -1,4 +1,4 @@
-"""Summarize instrumented DeskDash latency samples, in milliseconds."""
+"""Summarize instrumented WallDash latency samples, in milliseconds."""
 
 import argparse
 from collections import defaultdict

@@ -2,7 +2,7 @@
 
 ## Fixed location
 
-Quit KOReader and open `koreader/settings.reader.lua`. Add these entries inside the settings table, replacing the example coordinates with your own. The city name is optional. When both coordinates are set, DeskDash skips IP geolocation.
+Quit KOReader and open `koreader/settings.reader.lua`. Add these entries inside the settings table, replacing the example coordinates with your own. The city name is optional. When both coordinates are set, WallDash skips IP geolocation.
 
 ```lua
 ["deskdash_lat"] = 48.8584,

@@ -1,4 +1,4 @@
-# DeskDash development notes
+# WallDash development notes
 
 Use the [README](README.md) for installation and the [contribution guide](CONTRIBUTING.md) for testing and deployment.
 
@@ -20,6 +20,6 @@ Use the [README](README.md) for installation and the [contribution guide](CONTRI
 
 - Keep Kindle-specific hardware operations scoped to the PW4. It uses `/dev/rtc1` for timed wake, `/proc/touch` for touch power, and the BD71827 power supply paths. Use the SDL build to check UI and a PW4 to check suspend, wake, and current draw.
 - Wait for e-ink refresh and in-flight weather before suspending. KOReader's monotonic timers pause in suspend. Preserve the minute tick on wake and restore Wi-Fi, touch, and frontlight on interactive wake or close.
-- DeskDash disables KOReader's Auto suspend on PW4. Keep one owner for suspend. A past-deadline Auto suspend task has caused the UI loop to spin, with missing hourly power samples while the dashboard was open.
+- WallDash disables KOReader's Auto suspend on PW4. Keep one owner for suspend. A past-deadline Auto suspend task has caused the UI loop to spin, with missing hourly power samples while the dashboard was open.
 - Use a wall charger during SSH development. USB mass-storage mode unmounts `/mnt/us`, and a suspended device cannot answer SSH. Send dashboard commands serially and wait for repaint acknowledgment before capturing the framebuffer.
 - Let `koreader.sh` finish restoring the stock UI before relaunching KOReader. The deploy helper verifies first paint and rolls back on startup errors.

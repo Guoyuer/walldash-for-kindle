@@ -1,4 +1,4 @@
-# Contributing to DeskDash
+# Contributing to WallDash
 
 Report the Kindle model, firmware and KOReader version, power source, language, orientation, and steps to reproduce. For display bugs, include the affected page and a screenshot. Review logs and screenshots for personal information before attaching them.
 

@@ -1,7 +1,7 @@
 --[[--
-Desk dashboard plugin: turns KOReader into a wall clock + weather display.
+WallDash turns KOReader into a wall clock and weather display.
 
-Menu: Tools > Desk dashboard. Opens automatically when KOReader starts (toggle in the menu).
+Menu: Tools > WallDash. Opens automatically when KOReader starts (toggle in the menu).
 ]]
 local Device = require("device")
 local is_pw4 = Device.model == "KindlePaperWhite4"
@@ -34,7 +34,7 @@ end
 function DeskDash:init()
     if not DeskDash._logged then DeskDash._logged = true; require("logger").info("deskdash: loaded version", VERSION) end
     Dispatcher:registerAction("deskdash_show", {
-        category = "none", event = "ShowDeskDash", title = _("Desk dashboard"), general = true,
+        category = "none", event = "ShowDeskDash", title = _("WallDash"), general = true,
     })
     self.ui.menu:registerToMainMenu(self)
     UIManager.event_hook:registerWidget("InputEvent", self)
@@ -81,7 +81,7 @@ end
 
 function DeskDash:addToMainMenu(menu_items)
     menu_items.deskdash = {
-        text = _("Desk dashboard"),
+        text = _("WallDash"),
         sorting_hint = "tools",
         sub_item_table = {
             { text = _("Open dashboard"), callback = function() self:onShowDeskDash() end },

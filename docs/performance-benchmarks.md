@@ -1,10 +1,10 @@
 # PW4 power and latency testing
 
-Use the [optional SSH setup](../CONTRIBUTING.md#optional-kindle-development-tools) on a Kindle Paperwhite 4. Record the firmware, KOReader and DeskDash versions, orientation, power source, frontlight, and Wi-Fi state. Compare runs with the same conditions and keep charger-powered latency tests separate from battery tests.
+Use the [optional SSH setup](../CONTRIBUTING.md#optional-kindle-development-tools) on a Kindle Paperwhite 4. Record the firmware, KOReader and WallDash versions, orientation, power source, frontlight, and Wi-Fi state. Compare runs with the same conditions and keep charger-powered latency tests separate from battery tests.
 
 ## Latency
 
-Open DeskDash while connected to a wall charger. Run from the repository root:
+Open WallDash while connected to a wall charger. Run from the repository root:
 
 ```sh
 python tools/kctl.py command 'bench on'
@@ -22,7 +22,7 @@ python tools/kctl.py command 'bench off'
 
 ## Battery
 
-Unplug the charger with the home page open. Let DeskDash wake naturally for several hours, including a full night window when comparing night behavior. Reconnect power to collect results:
+Unplug the charger with the home page open. Let WallDash wake naturally for several hours, including a full night window when comparing night behavior. Reconnect power to collect results:
 
 ```sh
 python tools/power.py
