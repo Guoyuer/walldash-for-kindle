@@ -119,6 +119,7 @@ function DeskDash:onShowDeskDash()
             clock_24h = setting("clock_24h", true),
             language = setting("language", "en"),
             landscape = setting("landscape", false),
+            invert_colors = setting("invert_colors", false),
             battery_mode = setting("battery_mode", true),
             lat = setting("lat", nil), lon = setting("lon", nil), city = setting("city", nil),
         },

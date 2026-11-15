@@ -261,8 +261,7 @@ function Dashboard:pollCommand()
             self:onClose()
             return
         elseif cmd:match("^page [1-4]$") then
-            self.page, self.show_settings = tonumber(cmd:sub(6)), nil
-            self:redraw("partial")
+            self:showPage(tonumber(cmd:sub(6)))
         else
             local x, y = cmd:match("^tap (%d+) (%d+)$")
             handled = x ~= nil
@@ -573,11 +572,13 @@ local SETTING_ROWS = {
     -- Open-Meteo switches wind (km/h, mph) and precipitation (mm, inch) together with the temperature unit.
     { key = "units", label = "Units", options = { { "°C", "metric" }, { "°F", "imperial" } } },
     { key = "landscape", label = "Orientation", options = { { "Portrait", false }, { "Landscape", true } } },
+    { key = "invert_colors", label = "Invert colors", options = { { "Off", false }, { "On", true } } },
 }
-local PANEL_W, PANEL_H, PANEL_TOP, SETTING_ROW_H = 760, 492, 90, 92
+local PANEL_W, PANEL_TOP, SETTING_ROW_H = 760, 90, 92
 local SETTING_LABEL_W, SETTING_CHOICE_W = 290, 210
 local PANEL_CONTENT_W = SETTING_LABEL_W + 2 * SETTING_CHOICE_W
 local PANEL_CONTENT_H = PANEL_TOP + #SETTING_ROWS * SETTING_ROW_H
+local PANEL_H = PANEL_CONTENT_H + 34
 local FOOTER_H, FOOTER_BOTTOM, GEAR_W, GEAR_RIGHT = 88, 26, 100, 20
 
 function Dashboard:settingsPanel()
@@ -1159,6 +1160,7 @@ function Dashboard:rebuild()
     if self.show_settings then table.insert(page, self:settingsPanel()) end
     self[1] = FrameContainer:new{
         width = self.W, height = self.H, background = WHITE, bordersize = 0, padding = 0, margin = 0, page,
+        invert = self.settings.invert_colors,
     }
 end
 
@@ -1167,6 +1169,13 @@ end
 function Dashboard:redraw(mode)
     self:rebuild()
     UIManager:setDirty(self, mode or "ui")
+end
+
+function Dashboard:showPage(page)
+    -- Clear the previous page's light text from the dark background.
+    local flash = self.settings.invert_colors and page ~= self.page
+    self.page, self.show_settings = page, nil
+    self:redraw(flash and "full" or "partial")
 end
 
 function Dashboard:scheduleTick()
@@ -1181,7 +1190,8 @@ function Dashboard:onTick()
         self.resumed_at = nil
     end
     self:powerTick()
-    if self.page ~= 1 and os.time() - self.last_touch >= IDLE_RETURN then
+    local return_home = self.page ~= 1 and os.time() - self.last_touch >= IDLE_RETURN
+    if return_home then
         self.page, self.show_settings = 1, nil
     end
     local now = self:localNow()
@@ -1190,7 +1200,8 @@ function Dashboard:onTick()
     -- On battery the minute repaint uses "fast" (DU, ~260 ms) instead of "ui" (AUTO -> GC16 for anti-aliased
     -- digits, ~450 ms): only changed pixels are driven, so static gray text keeps its levels; the new digits lose
     -- their gray edges until the flashing full refresh every FLASH_EVERY minutes.
-    local mode = tonumber(os.date("!%M", now)) % FLASH_EVERY == 0 and "full"
+    local flash = (return_home and self.settings.invert_colors) or tonumber(os.date("!%M", now)) % FLASH_EVERY == 0
+    local mode = flash and "full"
         or (self:canSleep() and "fast" or "ui")
     Bench.add(self.pw.stats, "refresh." .. mode, 1)
     self:redraw(mode)
@@ -1335,8 +1346,7 @@ function Dashboard:onSwipe(_, ges)
     if self.show_settings then return true end
     local dir = ges.direction
     if dir == "west" or dir == "east" then
-        self.page = (self.page - 1 + (dir == "west" and 1 or -1)) % PAGES + 1
-        self:redraw("partial")
+        self:showPage((self.page - 1 + (dir == "west" and 1 or -1)) % PAGES + 1)
     end
     return true
 end
