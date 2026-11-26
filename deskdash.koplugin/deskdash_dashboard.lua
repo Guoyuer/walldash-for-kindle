@@ -665,14 +665,8 @@ function Dashboard:currentConditions()
     return self:tr(label), icon
 end
 
-function Dashboard:pageNow()
-    local t, d = self:localNow(), self.data
-    local wide = self.landscape
-    local column_w = wide and math.floor((self.W - 72) / 2) or self.W - 72
-    local date = os.date("!%A, %b ", t) .. tonumber(os.date("!%d", t))
-    if self.settings.language == "zh" then
-        date = string.format("%d月%d日 %s", tonumber(os.date("!%m", t)), tonumber(os.date("!%d", t)), self:tr(os.date("!%A", t)))
-    end
+function Dashboard:homeNotices(t)
+    local d = self.data
     local function fmt(at) return self:hhmm(at) end
     local alert_format, precip_format = self:tr("%s until %s"), self:tr("%s–%s · %d%% precip")
     local alert = Weather.activeAlert(self.alerts, t, fmt, alert_format)
@@ -685,10 +679,39 @@ function Dashboard:pageNow()
         alert = string.format(alert_format, "Wind Advisory", fmt(midnight + 18 * 3600))
         precip = Weather.nowcastText({ kind = "start", minutes = 25 }, tr)
     end
+    return alert, precip
+end
+
+-- The minute digits remember their actual position after KOReader lays out the page.
+local ClockDigit = TextWidget:extend{}
+function ClockDigit:paintTo(bb, x, y)
+    self.x, self.y = x, y
+    TextWidget.paintTo(self, bb, x, y)
+end
+
+function Dashboard:pageNow()
+    local t, d = self:localNow(), self.data
+    local wide = self.landscape
+    local column_w = wide and math.floor((self.W - 72) / 2) or self.W - 72
+    local date = os.date("!%A, %b ", t) .. tonumber(os.date("!%d", t))
+    if self.settings.language == "zh" then
+        date = string.format("%d月%d日 %s", tonumber(os.date("!%m", t)), tonumber(os.date("!%d", t)), self:tr(os.date("!%A", t)))
+    end
+    local alert, precip = self:homeNotices(t)
     local extra = (alert and 1 or 0) + (precip and 1 or 0)   -- make room for the notice lines
     -- Leave space beside the clock for the period marker in 12-hour mode.
     local clock_px = wide and (self.settings.clock_24h and 244 or 226) or (self.settings.clock_24h and 400 or 350) - 30 * extra
-    local clock = HorizontalGroup:new{ align = "bottom", txt(self:hhmm(t, true), HEAVY, clock_px) }
+    local prefix, minutes = self:hhmm(t, true):match("^(.*:)(%d%d)$")
+    local clock = HorizontalGroup:new{ align = "bottom", txt(prefix, HEAVY, clock_px) }
+    self.clock_digits = {}
+    for digit in minutes:gmatch("%d") do
+        local w = ClockDigit:new{ text = digit, face = face(HEAVY, clock_px), padding = 0 }
+        table.insert(clock, w)
+        table.insert(self.clock_digits, w)
+    end
+    self.clock_hour = math.floor(t / 3600)
+    self.clock_alert, self.clock_precip = alert, precip
+    self.clock_obs_fresh = self.obs and os.time() - self.obs.t < OBS_MAX_AGE
     if not self.settings.clock_24h then
         table.insert(clock, hspan(16))
         table.insert(clock, VerticalGroup:new{ txt(os.date("!%p", t), BOLD, wide and 34 or 46), vspan(wide and 54 or 77) })
@@ -1106,12 +1129,18 @@ function Dashboard:pageDetails()
 end
 
 -- Battery percentage on pages 2–4; page 1 only shows the low-battery warning.
-function Dashboard:batteryBadge()
+function Dashboard:badgeLevel()
     local pct = self.demo and 15 or (Device:isKindle() and self:batteryLevel())
     if not pct then return nil end
     local low = self.demo or (pct <= LOW_BATTERY and not self:onExternalPower())
+    if low or self.page ~= 1 then return pct, low end
+end
+
+function Dashboard:batteryBadge()
+    local pct, low = self:badgeLevel()
+    self.badge_pct = pct
+    if not pct then return end
     if not low then
-        if self.page == 1 then return nil end
         local I = Weather.ICON
         local icon = pct > 87 and I.battery_full or pct > 62 and I.battery_three_quarters
             or pct > 37 and I.battery_half or pct > 12 and I.battery_low or I.battery_empty
@@ -1127,6 +1156,7 @@ end
 local PAGE_TITLES = { nil, "HOURLY FORECAST", "7-DAY FORECAST", "DETAILS" }
 
 function Dashboard:rebuild()
+    self.clock_digits = nil
     local builders = { self.pageNow, self.pageHourly, self.pageDaily, self.pageDetails }
     -- Pages 2-4: the title sits at the same height on every page; the content is centred in the space below it
     -- (body_h, down to the footer), which the hourly chart fills.
@@ -1166,6 +1196,37 @@ end
 
 -- ---------------------------------------------------------------- refresh & input
 
+-- Repaint only changed digits while the rest of the home layout is still current.
+-- Hour changes also cover date, AM/PM and daily forecast rollover.
+function Dashboard:repaintMinutes(t, mode)
+    if not self.clock_digits or not self.page_ok or self.show_settings
+        or self.clock_hour ~= math.floor(t / 3600) or UIManager:getTopmostVisibleWidget() ~= self
+        or self:badgeLevel() ~= self.badge_pct then return false end
+    local alert, precip = self:homeNotices(t)
+    local fresh = self.obs and os.time() - self.obs.t < OBS_MAX_AGE
+    if alert ~= self.clock_alert or precip ~= self.clock_precip or fresh ~= self.clock_obs_fresh then return false end
+    local minutes = os.date("!%M", t)
+    for i, digit in ipairs(self.clock_digits) do
+        local value = minutes:sub(i, i)
+        if not digit.x then return false end
+        if value ~= digit.text then
+            local size = digit:getSize()
+            digit:setText(value)
+            if digit:getWidth() ~= size.w then return false end
+            -- The date reclaims the blank descent below the clock. Leave that strip intact.
+            local h = size.h - (self.landscape and 20 or 36)
+            if digit.x < 0 or digit.y < 0 or digit.x + size.w > self.W or digit.y + h > self.H then return false end
+            local bb = Screen.bb:viewport(digit.x, digit.y, size.w, h)
+            Screen.bb:paintRect(digit.x, digit.y, size.w, h, WHITE)
+            TextWidget.paintTo(digit, bb, 0, 0)
+            if self.settings.invert_colors then Screen.bb:invertRect(digit.x, digit.y, size.w, h) end
+            UIManager:setDirty(nil, mode, Geom:new{ x = digit.x, y = digit.y, w = size.w, h = h })
+            Bench.add(self.pw.stats, "clock.digit", 1)
+        end
+    end
+    return true
+end
+
 function Dashboard:redraw(mode)
     self:rebuild()
     UIManager:setDirty(self, mode or "ui")
@@ -1204,7 +1265,10 @@ function Dashboard:onTick()
     local mode = flash and "full"
         or (self:canSleep() and "fast" or "ui")
     Bench.add(self.pw.stats, "refresh." .. mode, 1)
-    self:redraw(mode)
+    -- The stock UI can write a charging icon into our framebuffer on external power.
+    -- Keep its regular page repaint; a weather tick already repaints when the worker finishes.
+    local local_clock = not self.pw.ac or self.weather_job
+    if flash or return_home or not local_clock or not self:repaintMinutes(now, mode) then self:redraw(mode) end
     self:scheduleTick()
     self.wake_sample = sample
     Bench.mark(sample, "build")

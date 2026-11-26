@@ -11,13 +11,32 @@ local PATH = "/tmp/deskdash_weather."
 -- Polls 4x a second: Wi-Fi is the most expensive thing the dashboard does, so don't keep it on waiting for a poll.
 local function waitForWifi()
     local deadline = time.now() + time.s(30)
+    -- Open in the weather child: never share a parent's LIPC handle across fork.
+    local ok, lipc = pcall(require, "libopenlipclua")
+    local opened, handle
+    if ok then opened, handle = pcall(lipc.open_no_name) end
+    if not opened then handle = nil end
     repeat
-        local p = io.popen("timeout -s KILL 3 lipc-get-prop com.lab126.wifid cmState 2>/dev/null")
-        local state = p and p:read("*l")
-        if p then p:close() end
-        if state == "CONNECTED" then return true end
+        local state
+        if handle then
+            ok, state = pcall(handle.get_string_property, handle, "com.lab126.wifid", "cmState")
+            if not ok or not state then
+                handle:close()
+                handle = nil
+            end
+        end
+        if not handle then
+            local p = io.popen("timeout -s KILL 3 lipc-get-prop com.lab126.wifid cmState 2>/dev/null")
+            state = p and p:read("*l")
+            if p then p:close() end
+        end
+        if state == "CONNECTED" then
+            if handle then handle:close() end
+            return true
+        end
         ffiutil.usleep(250000)
     until time.now() >= deadline
+    if handle then handle:close() end
     logger.warn("deskdash: Wi-Fi not connected after 30 s")
     return false
 end
